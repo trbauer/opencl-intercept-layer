@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2018-2022 Intel Corporation
+// Copyright (c) 2018-2024 Intel Corporation
 //
 // SPDX-License-Identifier: MIT
 */
@@ -295,6 +295,31 @@ struct CLdispatchX
         cl_mutable_command_khr* mutable_handle);
 
     // cl_khr_command_buffer
+    cl_int (CL_API_CALL *clCommandSVMMemcpyKHR) (
+        cl_command_buffer_khr command_buffer,
+        cl_command_queue command_queue,
+        void* dst_ptr,
+        const void* src_ptr,
+        size_t size,
+        cl_uint num_sync_points_in_wait_list,
+        const cl_sync_point_khr* sync_point_wait_list,
+        cl_sync_point_khr* sync_point,
+        cl_mutable_command_khr* mutable_handle);
+
+    // cl_khr_command_buffer
+    cl_int (CL_API_CALL *clCommandSVMMemFillKHR) (
+        cl_command_buffer_khr command_buffer,
+        cl_command_queue command_queue,
+        void* svm_ptr,
+        const void* pattern,
+        size_t pattern_size,
+        size_t size,
+        cl_uint num_sync_points_in_wait_list,
+        const cl_sync_point_khr* sync_point_wait_list,
+        cl_sync_point_khr* sync_point,
+        cl_mutable_command_khr* mutable_handle);
+
+    // cl_khr_command_buffer
     cl_int (CL_API_CALL *clCommandNDRangeKernelKHR) (
         cl_command_buffer_khr command_buffer,
         cl_command_queue command_queue,
@@ -316,6 +341,30 @@ struct CLdispatchX
         size_t param_value_size,
         void* param_value,
         size_t* param_value_size_ret);
+
+    // cl_khr_command_buffer_multi_device
+    cl_command_buffer_khr (CL_API_CALL *clRemapCommandBufferKHR) (
+        cl_command_buffer_khr command_buffer,
+        cl_bool automatic,
+        cl_uint num_queues,
+        const cl_command_queue* queues,
+        cl_uint num_handles,
+        const cl_mutable_command_khr* handles,
+        cl_mutable_command_khr* handles_ret,
+        cl_int* errcode_ret) ;
+
+    // cl_khr_command_buffer_mutable_dispatch
+    cl_int (CL_API_CALL *clUpdateMutableCommandsKHR) (
+        cl_command_buffer_khr command_buffer,
+        const cl_mutable_base_config_khr* mutable_config) ;
+
+    // cl_khr_command_buffer_mutable_dispatch
+    cl_int (CL_API_CALL *clGetMutableCommandInfoKHR) (
+        cl_mutable_command_khr command,
+        cl_mutable_command_info_khr param_name,
+        size_t param_value_size,
+        void* param_value,
+        size_t* param_value_size_ret) ;
 
     // cl_khr_create_command_queue
     cl_command_queue    (CL_API_CALL *clCreateCommandQueueWithPropertiesKHR) (

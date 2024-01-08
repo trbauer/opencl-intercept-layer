@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2018-2022 Intel Corporation
+// Copyright (c) 2018-2024 Intel Corporation
 //
 // SPDX-License-Identifier: MIT
 */
@@ -14,6 +14,7 @@
 #include <time.h>       // strdate
 
 #include "common.h"
+#include "demangle.h"
 #include "emulate.h"
 #include "intercept.h"
 
@@ -52,15 +53,35 @@ Description:
     c -= a; c -= b; c ^= (b>>15); \
 }
 static inline uint64_t Hash(
-    const unsigned int *data,
+    const void* ptr,
     size_t count )
 {
     unsigned int    a = 0x428a2f98, hi = 0x71374491, lo = 0xb5c0fbcf;
-    while( count-- )
+
+    const uint32_t* dwData = reinterpret_cast<const uint32_t*>(ptr);
+    size_t dwCount = count / sizeof(uint32_t);
+    while( dwCount-- )
     {
-        a ^= *(data++);
+        a ^= *(dwData++);
         HASH_JENKINS_MIX( a, hi, lo );
     }
+
+    size_t extra = count % sizeof(uint32_t);
+    if( extra != 0 )
+    {
+        uint32_t extraValue = 0;
+
+        const uint8_t* data = reinterpret_cast<const uint8_t*>(ptr);
+        data += count - extra;
+
+        for( size_t i = 0; i < extra; i++) {
+            extraValue += *(data++) << (i * 8);
+        }
+
+        a ^= extraValue;
+        HASH_JENKINS_MIX( a, hi, lo );
+    }
+
     return (((uint64_t)hi)<<32)|lo;
 }
 #undef HASH_JENKINS_MIX
@@ -239,10 +260,10 @@ CLIntercept::~CLIntercept()
         }
     }
 
-    log( "... shutdown complete.\n" );
+    m_ChromeTrace.flush();
 
+    log( "... shutdown complete.\n" );
     m_InterceptLog.close();
-    m_InterceptTrace.close();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -321,7 +342,7 @@ bool CLIntercept::init()
 #if defined(_WIN32)
     OS::Services_Common::ENV_PREFIX = "CLI_";
     OS::Services_Common::REGISTRY_KEY = "SOFTWARE\\INTEL\\IGFX\\CLINTERCEPT";
-#elif defined(__linux__) || defined(__APPLE__)
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
     OS::Services_Common::ENV_PREFIX = "CLI_";
     OS::Services_Common::CONFIG_FILE = "clintercept.conf";
     OS::Services_Common::SYSTEM_DIR = "/etc/OpenCL";
@@ -351,7 +372,7 @@ bool CLIntercept::init()
 #include "controls.h"
 #undef CLI_CONTROL
 
-#if defined(_WIN32) || defined(__linux__) || defined(__APPLE__)
+#if defined(_WIN32) || defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
     if( !m_Config.DumpDir.empty() )
     {
         std::replace( m_Config.DumpDir.begin(), m_Config.DumpDir.end(), '\\', '/' );
@@ -395,22 +416,15 @@ bool CLIntercept::init()
         fileName += sc_TraceFileName;
 
         OS().MakeDumpDirectories( fileName );
-        m_InterceptTrace.open(
-            fileName.c_str(),
-            std::ios::out | std::ios::binary );
-        m_InterceptTrace << "[\n";
+
+        uint64_t    processId = OS().GetProcessID();
+        uint32_t    bufferSize = m_Config.ChromeTraceBufferSize;
+        bool        addFlowEvents = m_Config.ChromeFlowEvents;
+        m_ChromeTrace.init( fileName, processId, bufferSize, addFlowEvents );
 
         uint64_t    threadId = OS().GetThreadID();
         std::string processName = OS().GetProcessName();
-        m_InterceptTrace
-            << "{\"ph\":\"M\", \"name\":\"process_name\", \"pid\":" << m_ProcessId
-            << ", \"tid\":" << threadId
-            << ", \"args\":{\"name\":\"" << processName
-            << "\"}},\n";
-        //m_InterceptTrace
-        //    << "{\"ph\":\"M\", \"name\":\"thread_name\", \"pid\":" << processId
-        //    << ", \"tid\":" << threadId
-        //    << ", \"args\":{\"name\":\"Host APIs\"}},\n";
+        m_ChromeTrace.addProcessMetadata( threadId, processName );
     }
 
     std::string name = "";
@@ -454,6 +468,11 @@ bool CLIntercept::init()
 #else
         "    MDAPI(NOT supported)\n"
 #endif
+#if defined(USE_DEMANGLE)
+        "    Demangling(supported)\n"
+#else
+        "    Demangling(NOT supported)\n"
+#endif
 #if defined(CLINTERCEPT_HIGH_RESOLUTON_CLOCK)
         "    clock(high_resolution_clock)\n"
 #else
@@ -463,14 +482,14 @@ bool CLIntercept::init()
 #if defined(_WIN32)
     log( "CLIntercept environment variable prefix: " + std::string( OS::Services_Common::ENV_PREFIX ) + "\n"  );
     log( "CLIntercept registry key: " + std::string( OS::Services_Common::REGISTRY_KEY ) + "\n" );
-#elif defined(__linux__) || defined(__APPLE__)
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
     log( "CLIntercept environment variable prefix: " + std::string( OS::Services_Common::ENV_PREFIX ) + "\n"  );
     log( "CLIntercept config file: " + std::string( OS::Services_Common::CONFIG_FILE ) + "\n" );
 #endif
 
     // Windows and Linux load the real OpenCL library and retrieve
     // the OpenCL entry points from the real library dynamically.
-#if defined(_WIN32) || defined(__linux__)
+#if defined(_WIN32) || defined(__linux__) || defined(__FreeBSD__)
     if( libName != "" )
     {
         log( "Read OpenCL file name from user parameters: " + libName + "\n" );
@@ -510,13 +529,19 @@ bool CLIntercept::init()
             "real_libOpenCL.so",
         };
 
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__FreeBSD__)
 
         const std::string libNames[] =
         {
             "./real_libOpenCL.so",
-            "/usr/lib/x86_64-linux-gnu/libOpenCL.so.1",
-            "/usr/lib/x86_64-linux-gnu/libOpenCL.so",
+#ifdef CLINTERCEPT_LIBRARY_ARCHITECTURE
+            "/usr/lib/" CLINTERCEPT_LIBRARY_ARCHITECTURE "/libOpenCL.so.1",
+            "/usr/lib/" CLINTERCEPT_LIBRARY_ARCHITECTURE "/libOpenCL.so",
+#endif
+            "/usr/lib/libOpenCL.so.1",
+            "/usr/lib/libOpenCL.so",
+            "/usr/local/lib/libOpenCL.so.1",
+            "/usr/local/lib/libOpenCL.so",
             "/opt/intel/opencl/lib64/libOpenCL.so.1",
             "/opt/intel/opencl/lib64/libOpenCL.so",
             "/glob/development-tools/oneapi/inteloneapi/compiler/latest/linux/lib/libOpenCL.so.1",
@@ -593,11 +618,7 @@ bool CLIntercept::init()
         using us = std::chrono::microseconds;
         uint64_t    usStartTime =
             std::chrono::duration_cast<us>(m_StartTime.time_since_epoch()).count();
-        m_InterceptTrace
-            << "{\"ph\":\"M\", \"name\":\"clintercept_start_time\", \"pid\":" << m_ProcessId
-            << ", \"tid\":" << threadId
-            << ", \"args\":{\"start_time\":" << usStartTime
-            << "}},\n";
+        m_ChromeTrace.addStartTimeMetadata( threadId, usStartTime );
     }
 
     log( "... loading complete.\n" );
@@ -2586,6 +2607,180 @@ void CLIntercept::getCommandBufferPropertiesString(
 
 ///////////////////////////////////////////////////////////////////////////////
 //
+void CLIntercept::getCommandBufferMutableConfigString(
+    const cl_mutable_base_config_khr* mutable_config,
+    std::string& str ) const
+{
+    str = "";
+
+    if( mutable_config )
+    {
+        char s[256];
+        CLI_SPRINTF(s, 256, "type = %s (%u), next = %p, num_mutable_dispatch = %u",
+            enumName().name_command_buffer_structure_type(mutable_config->type).c_str(),
+            mutable_config->type,
+            mutable_config->next,
+            mutable_config->num_mutable_dispatch);
+        str += s;
+
+        for( cl_uint i = 0; i < mutable_config->num_mutable_dispatch; i++ )
+        {
+            const cl_mutable_dispatch_config_khr* dispatchConfig =
+                &mutable_config->mutable_dispatch_list[i];
+            CLI_SPRINTF(s, 256, "\n  dispatch config %u: type = %s (%u), next = %p, command = %p:",
+                i,
+                enumName().name_command_buffer_structure_type(dispatchConfig->type).c_str(),
+                dispatchConfig->type,
+                dispatchConfig->next,
+                dispatchConfig->command);
+            str += s;
+            if( dispatchConfig->type == CL_STRUCTURE_TYPE_MUTABLE_DISPATCH_CONFIG_KHR )
+            {
+                CLI_SPRINTF(s, 256, "\n    num_args = %u, num_svm_args = %u, num_exec_infos = %u, work_dim = %u",
+                    dispatchConfig->num_args,
+                    dispatchConfig->num_svm_args,
+                    dispatchConfig->num_exec_infos,
+                    dispatchConfig->work_dim);
+                str += s;
+
+                if( dispatchConfig->num_args != 0 &&
+                    dispatchConfig->arg_list == nullptr )
+                {
+                        CLI_SPRINTF(s, 256, "\n      error: num_args is %u and arg_list is NULL!",
+                            dispatchConfig->num_args);
+                        str += s;
+                }
+                else
+                {
+                    for( cl_uint a = 0; a < dispatchConfig->num_args; a++ )
+                    {
+                        const cl_mutable_dispatch_arg_khr* arg =
+                            &dispatchConfig->arg_list[a];
+                        if( ( arg->arg_value != NULL ) &&
+                            ( arg->arg_size == sizeof(cl_mem) ) )
+                        {
+                            cl_mem* pMem = (cl_mem*)arg->arg_value;
+                            CLI_SPRINTF(s, 256, "\n      arg %u: arg_index = %u, arg_size = %zu, arg_value = %p",
+                                a,
+                                arg->arg_index,
+                                arg->arg_size,
+                                pMem[0] );
+                        }
+                        else if( ( arg->arg_value != NULL ) &&
+                                 ( arg->arg_size == sizeof(cl_uint) ) )
+                        {
+                            cl_uint*    pData = (cl_uint*)arg->arg_value;
+                            CLI_SPRINTF(s, 256, "\n      arg %u: arg_index = %u, arg_size = %zu, arg_value = 0x%x",
+                                a,
+                                arg->arg_index,
+                                arg->arg_size,
+                                pData[0]);
+                        }
+                        else if( ( arg->arg_value != NULL ) &&
+                                 ( arg->arg_size == sizeof(cl_ulong) ) )
+                        {
+                            cl_ulong*   pData = (cl_ulong*)arg->arg_value;
+                            CLI_SPRINTF(s, 256, "\n      arg %u: arg_index = %u, arg_size = %zu, arg_value = 0x%" PRIx64,
+                                a,
+                                arg->arg_index,
+                                arg->arg_size,
+                                pData[0]);
+                        }
+                        else
+                        {
+                            CLI_SPRINTF(s, 256, "\n      arg %u: arg_index = %u, arg_size = %zu",
+                                a,
+                                arg->arg_index,
+                                arg->arg_size);
+                        }
+
+                        str += s;
+                    }
+                }
+
+                if( dispatchConfig->num_svm_args != 0 &&
+                    dispatchConfig->arg_svm_list == nullptr )
+                {
+                        CLI_SPRINTF(s, 256, "\n      error: num_svm_args is %u and arg_svm_list is NULL!",
+                            dispatchConfig->num_svm_args);
+                        str += s;
+                }
+                else
+                {
+                    for( cl_uint a = 0; a < dispatchConfig->num_svm_args; a++ )
+                    {
+                        const cl_mutable_dispatch_arg_khr* arg =
+                            &dispatchConfig->arg_svm_list[a];
+                        CLI_SPRINTF(s, 256, "\n      svm arg %u: arg_index = %u, arg_value = %p",
+                            a,
+                            arg->arg_index,
+                            arg->arg_value);
+                        str += s;
+                    }
+                }
+
+                if( dispatchConfig->num_exec_infos != 0 &&
+                    dispatchConfig->exec_info_list == nullptr )
+                {
+                        CLI_SPRINTF(s, 256, "\n      error: num_exec_infos is %u and exec_info_list is NULL!",
+                            dispatchConfig->num_exec_infos);
+                        str += s;
+                }
+                else
+                {
+                    for( cl_uint a = 0; a < dispatchConfig->num_exec_infos; a++ )
+                    {
+                        const cl_mutable_dispatch_exec_info_khr* info =
+                            &dispatchConfig->exec_info_list[a];
+                        CLI_SPRINTF(s, 256, "\n      exec info %u: param_name = %s (%04X), param_value_size = %zu, param_value = %p",
+                            a,
+                            enumName().name(info->param_name).c_str(),
+                            info->param_name,
+                            info->param_value_size,
+                            info->param_value);
+                        str += s;
+                    }
+                }
+
+                if( dispatchConfig->global_work_offset != nullptr ||
+                    dispatchConfig->global_work_size != nullptr ||
+                    dispatchConfig->local_work_size != nullptr )
+                {
+                    cl_uint work_dim = dispatchConfig->work_dim;
+                    if( work_dim == 0 )
+                    {
+                        // TODO: lock?
+                        auto iter = m_MutableCommandInfoMap.find(
+                            dispatchConfig->command);
+                        if( iter != m_MutableCommandInfoMap.end() )
+                        {
+                            work_dim = iter->second.WorkDim;
+                        }
+                    }
+                    if( work_dim != 0 )
+                    {
+                        std::string dispatchStr;
+                        getEnqueueNDRangeKernelArgsString(
+                            work_dim,
+                            dispatchConfig->global_work_offset,
+                            dispatchConfig->global_work_size,
+                            dispatchConfig->local_work_size,
+                            dispatchStr);
+                        str += "\n      ";
+                        str += dispatchStr;
+                    }
+                }
+            }
+        }
+    }
+    else
+    {
+        str = "NULL";
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//
 void CLIntercept::getCreateKernelsInProgramRetString(
     cl_int retVal,
     cl_kernel* kernels,
@@ -2723,7 +2918,7 @@ void CLIntercept::getEnqueueNDRangeKernelArgsString(
     }
     else
     {
-        ss << "NULL?";
+        ss << "NULL";
     }
     ss << " >, ";
 
@@ -3180,6 +3375,14 @@ void CLIntercept::logKernelInfo(
                     sizeof(wgs),
                     &wgs,
                     NULL );
+                size_t  rwgs[3] = {0, 0, 0};
+                errorCode |= dispatch().clGetKernelWorkGroupInfo(
+                    kernel,
+                    deviceList[i],
+                    CL_KERNEL_COMPILE_WORK_GROUP_SIZE,
+                    sizeof(rwgs),
+                    rwgs,
+                    NULL );
                 cl_ulong pms = 0;
                 errorCode |= dispatch().clGetKernelWorkGroupInfo(
                     kernel,
@@ -3197,12 +3400,20 @@ void CLIntercept::logKernelInfo(
                     &lms,
                     NULL );
                 cl_ulong sms = 0;
-                cl_int errorCode_sms =dispatch().clGetKernelWorkGroupInfo(
+                cl_int errorCode_sms = dispatch().clGetKernelWorkGroupInfo(
                     kernel,
                     deviceList[i],
                     CL_KERNEL_SPILL_MEM_SIZE_INTEL,
                     sizeof(sms),
                     &sms,
+                    NULL );
+                cl_uint regCount = 0;
+                cl_int errorCode_regCount = dispatch().clGetKernelWorkGroupInfo(
+                    kernel,
+                    deviceList[i],
+                    CL_KERNEL_REGISTER_COUNT_INTEL,
+                    sizeof(regCount),
+                    &regCount,
                     NULL );
                 if( errorCode == CL_SUCCESS )
                 {
@@ -3220,11 +3431,20 @@ void CLIntercept::logKernelInfo(
                     if( config().KernelInfoLogging )
                     {
                         logf( "        Work Group Size: %zu\n", wgs);
+                        if( rwgs[0] != 0 || rwgs[1] != 0 || rwgs[2] != 0 )
+                        {
+                            logf( "        Required Work Group Size: < %zu, %zu, %zu >\n",
+                                rwgs[0], rwgs[1], rwgs[2]);
+                        }
                         logf( "        Private Mem Size: %u\n", (cl_uint)pms);
                         logf( "        Local Mem Size: %u\n", (cl_uint)lms);
                         if( errorCode_sms == CL_SUCCESS )
                         {
                             logf( "        Spill Mem Size: %u\n", (cl_uint)sms);
+                        }
+                        if( errorCode_regCount == CL_SUCCESS )
+                        {
+                            logf( "        Register Count: %u\n", regCount);
                         }
                     }
                 }
@@ -3795,9 +4015,8 @@ void CLIntercept::combineProgramStrings(
         allocSize += length;
     }
 
-    // Allocate a multiple of four bytes.
     // Allocate some extra to make sure we're null terminated.
-    allocSize = ( allocSize + ( 4 + 4 - 1 ) ) & ~( 4 - 1 );
+    allocSize++;
 
     singleString = new char[ allocSize ];
     if( singleString )
@@ -3862,23 +4081,15 @@ void CLIntercept::incrementProgramCompileCount(
 
 ///////////////////////////////////////////////////////////////////////////////
 //
-uint64_t CLIntercept::hashString(
-    const char* singleString,
+uint64_t CLIntercept::computeHash(
+    const void* ptr,
     size_t length )
 {
     uint64_t    hash = 0;
 
-    if( singleString != NULL )
+    if( ptr != NULL )
     {
-        const unsigned int* dwProgramSource = (const unsigned int*)singleString;
-        size_t  dwProgramSize = length;
-
-        dwProgramSize = ( dwProgramSize + ( 4 - 1 ) ) & ~( 4 - 1 );
-        dwProgramSize /= 4;
-
-        hash = Hash(
-            dwProgramSource,
-            dwProgramSize );
+        hash = Hash( ptr, length );
     }
 
     return hash;
@@ -3907,27 +4118,11 @@ void CLIntercept::saveProgramOptionsHash(
 
     if( program != NULL && options != NULL )
     {
-        // First: Create a copy of the options string that's padded to a
-        // multiple of four bytes.
-
-        cl_uint count = 1;
-        const char** strings = &options;
-        const size_t* lengths = NULL;
-        char* singleString = NULL;
-        combineProgramStrings(
-            count,
-            strings,
-            lengths,
-            singleString );
-
-        uint64_t hash = hashString(
-            singleString,
-            strlen( singleString ) );
+        uint64_t hash = computeHash(
+            options,
+            strlen( options ) );
 
         m_ProgramInfoMap[ program ].OptionsHash = hash;
-
-        delete [] singleString;
-        singleString = NULL;
     }
 }
 
@@ -4608,12 +4803,12 @@ void CLIntercept::dumpProgramSourceScript(
 ///////////////////////////////////////////////////////////////////////////////
 //
 void CLIntercept::dumpProgramSource(
-    uint64_t hash,
     cl_program program,
+    uint64_t hash,
+    bool modified,
     const char* singleString )
 {
     std::lock_guard<std::mutex> lock(m_Mutex);
-
     CLI_ASSERT( config().DumpProgramSource || config().AutoCreateSPIRV );
 
     std::string fileName;
@@ -4622,6 +4817,11 @@ void CLIntercept::dumpProgramSource(
     {
         OS().GetDumpDirectoryName( sc_DumpDirectoryName, fileName );
     }
+    if( modified )
+    {
+        fileName += "/Modified";
+    }
+
     // Make the filename.  It will have the form:
     //   CLI_<program number>_<hash>_source.cl
     {
@@ -4650,6 +4850,8 @@ void CLIntercept::dumpProgramSource(
     // Dump the program source to a .cl file.
     if( singleString )
     {
+
+
         std::ofstream os;
         os.open(
             fileName.c_str(),
@@ -4679,8 +4881,9 @@ void CLIntercept::dumpProgramSource(
 ///////////////////////////////////////////////////////////////////////////////
 //
 void CLIntercept::dumpInputProgramBinaries(
-    uint64_t hash,
     const cl_program program,
+    uint64_t hash,
+    bool modified,
     cl_uint num_devices,
     const cl_device_id* device_list,
     const size_t* lengths,
@@ -4695,6 +4898,10 @@ void CLIntercept::dumpInputProgramBinaries(
     // Get the dump directory name.
     {
         OS().GetDumpDirectoryName( sc_DumpDirectoryName, fileName );
+    }
+    if( modified )
+    {
+        fileName += "/Modified";
     }
 
     // Make the filename.  It will have the form:
@@ -4788,8 +4995,9 @@ void CLIntercept::dumpInputProgramBinaries(
 ///////////////////////////////////////////////////////////////////////////////
 //
 void CLIntercept::dumpProgramSPIRV(
-    uint64_t hash,
     cl_program program,
+    uint64_t hash,
+    bool modified,
     const size_t length,
     const void* il )
 {
@@ -4802,6 +5010,10 @@ void CLIntercept::dumpProgramSPIRV(
     // Get the dump directory name.
     {
         OS().GetDumpDirectoryName( sc_DumpDirectoryName, fileName );
+    }
+    if( modified )
+    {
+        fileName += "/Modified";
     }
 
     // Make the filename.  It will have the form:
@@ -4831,7 +5043,7 @@ void CLIntercept::dumpProgramSPIRV(
         OS().MakeDumpDirectories( fileName );
     }
 
-    // Dump the program source to a .cl file.
+    // Dump the program source to a .spv file.
     {
         std::ofstream os;
         os.open(
@@ -4998,6 +5210,7 @@ void CLIntercept::dumpProgramOptionsScript(
 //
 void CLIntercept::dumpProgramOptions(
     const cl_program program,
+    bool modified,
     cl_bool isCompile,
     cl_bool isLink,
     const char* options )
@@ -5020,6 +5233,11 @@ void CLIntercept::dumpProgramOptions(
         {
             OS().GetDumpDirectoryName( sc_DumpDirectoryName, fileName );
         }
+        if( modified )
+        {
+            fileName += "/Modified";
+        }
+
         // Make the filename.  It will have the form:
         //   CLI_<program number>_<program hash>_<compile count>_<options hash>
         // Leave off the extension for now.
@@ -5045,6 +5263,12 @@ void CLIntercept::dumpProgramOptions(
             fileName += "/CLI_";
             fileName += numberString;
         }
+
+        // Now make directories as appropriate.
+        {
+            OS().MakeDumpDirectories( fileName );
+        }
+
         // Dump the program options to a .txt file.
         {
             fileName +=
@@ -5178,12 +5402,25 @@ void CLIntercept::dumpProgramBuildLog(
 ///////////////////////////////////////////////////////////////////////////////
 //
 void CLIntercept::getTimingTagBlocking(
+    const char* functionName,
     const cl_bool blocking,
-    std::string& str )
+    const size_t size,
+    std::string& hostTag,
+    std::string& deviceTag )
 {
+    deviceTag.reserve(128);
+    deviceTag = functionName;
+
+    if( size && config().DevicePerformanceTimeTransferTracking )
+    {
+        char    s[256];
+        CLI_SPRINTF( s, 256, "( %zu bytes )", size );
+        deviceTag += s;
+    }
+
     if( blocking == CL_TRUE )
     {
-        str += "blocking";
+        hostTag += "blocking";
     }
 }
 
@@ -5193,6 +5430,7 @@ void CLIntercept::getTimingTagsMap(
     const char* functionName,
     const cl_map_flags flags,
     const cl_bool blocking,
+    const size_t size,
     std::string& hostTag,
     std::string& deviceTag )
 {
@@ -5220,15 +5458,68 @@ void CLIntercept::getTimingTagsMap(
     deviceTag = functionName;
     deviceTag += "( ";
     deviceTag += hostTag;
+    if( size && config().DevicePerformanceTimeTransferTracking )
+    {
+        char    s[256];
+        CLI_SPRINTF( s, 256, "; %zu bytes", size );
+        deviceTag += s;
+    }
     deviceTag += " )";
 
     if( blocking == CL_TRUE )
     {
-        if( !hostTag.empty() )
+        hostTag += "; blocking";
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//
+void CLIntercept::getTimingTagsUnmap(
+    const char* functionName,
+    const void* ptr,
+    std::string& hostTag,
+    std::string& deviceTag )
+{
+    if( ptr )
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+
+        CMapPointerInfoMap::iterator iter = m_MapPointerInfoMap.find( ptr );
+        if( iter != m_MapPointerInfoMap.end() )
         {
-            hostTag += ", ";
+            const cl_map_flags flags = iter->second.Flags;
+            const size_t size = iter->second.Size;
+
+            if( flags & CL_MAP_WRITE_INVALIDATE_REGION )
+            {
+                hostTag += "WI";
+            }
+            else if( flags & CL_MAP_WRITE )
+            {
+                hostTag += "RW";
+            }
+            else if( flags & CL_MAP_READ )
+            {
+                hostTag += "R";
+            }
+
+            if( flags & ~(CL_MAP_READ | CL_MAP_WRITE | CL_MAP_WRITE_INVALIDATE_REGION) )
+            {
+                hostTag += "?";
+            }
+
+            deviceTag.reserve(128);
+            deviceTag = functionName;
+            deviceTag += "( ";
+            deviceTag += hostTag;
+            if( size && config().DevicePerformanceTimeTransferTracking )
+            {
+                char    s[256];
+                CLI_SPRINTF( s, 256, "; %zu bytes", size );
+                deviceTag += s;
+            }
+            deviceTag += " )";
         }
-        hostTag += "blocking";
     }
 }
 
@@ -5238,6 +5529,7 @@ void CLIntercept::getTimingTagsMemfill(
     const char* functionName,
     const cl_command_queue queue,
     const void* dst,
+    const size_t size,
     std::string& hostTag,
     std::string& deviceTag )
 {
@@ -5289,6 +5581,12 @@ void CLIntercept::getTimingTagsMemfill(
             deviceTag = functionName;
             deviceTag += "( ";
             deviceTag += hostTag;
+            if( size && config().DevicePerformanceTimeTransferTracking )
+            {
+                char    s[256];
+                CLI_SPRINTF( s, 256, "; %zu bytes", size );
+                deviceTag += s;
+            }
             deviceTag += " )";
         }
     }
@@ -5302,6 +5600,7 @@ void CLIntercept::getTimingTagsMemcpy(
     const cl_bool blocking,
     const void* dst,
     const void* src,
+    const size_t size,
     std::string& hostTag,
     std::string& deviceTag )
 {
@@ -5368,17 +5667,19 @@ void CLIntercept::getTimingTagsMemcpy(
             deviceTag = functionName;
             deviceTag += "( ";
             deviceTag += hostTag;
+            if( size && config().DevicePerformanceTimeTransferTracking )
+            {
+                char    s[256];
+                CLI_SPRINTF( s, 256, "; %zu bytes", size );
+                deviceTag += s;
+            }
             deviceTag += " )";
         }
     }
 
     if( blocking == CL_TRUE )
     {
-        if( !hostTag.empty() )
-        {
-            hostTag += ", ";
-        }
-        hostTag += "blocking";
+        hostTag += "; blocking";
     }
 }
 
@@ -5513,6 +5814,20 @@ void CLIntercept::getTimingTagsKernel(
                 if( simd )
                 {
                     ss << " SIMD" << simd;
+                }
+            }
+            {
+                cl_uint regCount = 0;
+                dispatch().clGetKernelWorkGroupInfo(
+                    kernel,
+                    device,
+                    CL_KERNEL_REGISTER_COUNT_INTEL,
+                    sizeof(regCount),
+                    &regCount,
+                    NULL );
+                if( regCount )
+                {
+                    ss << " REG" << regCount;
                 }
             }
             {
@@ -5736,10 +6051,10 @@ void CLIntercept::updateHostTimingStats(
     if( config().HostPerformanceTimeLogging )
     {
         uint64_t    numberOfCalls = hostTimingStats.NumberOfCalls;
-        logf( "Host Time for call %u: %s = %u\n",
-            (unsigned int)numberOfCalls,
+        logf( "Host Time for call %" PRIu64 ": %s = %" PRIu64 " ns\n",
+            numberOfCalls,
             key.c_str(),
-            (unsigned int)nsDelta );
+            nsDelta );
     }
 }
 
@@ -6450,8 +6765,11 @@ void CLIntercept::addKernelInfo(
     const SProgramInfo& programInfo = m_ProgramInfoMap[ program ];
 
     SKernelInfo& kernelInfo = m_KernelInfoMap[ kernel ];
+    std::string demangledName = config().DemangleKernelNames ?
+        demangle(kernelName) :
+        kernelName;
 
-    kernelInfo.KernelName = kernelName;
+    kernelInfo.KernelName = demangledName;
 
     kernelInfo.ProgramHash = programInfo.ProgramHash;
     kernelInfo.OptionsHash = programInfo.OptionsHash;
@@ -6459,7 +6777,7 @@ void CLIntercept::addKernelInfo(
     kernelInfo.ProgramNumber = programInfo.ProgramNumber;
     kernelInfo.CompileCount = programInfo.CompileCount - 1;
 
-    addShortKernelName( kernelName );
+    addShortKernelName( demangledName );
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -6502,8 +6820,11 @@ void CLIntercept::addKernelInfo(
                     kernelName[ kernelNameSize ] = 0;
 
                     SKernelInfo& kernelInfo = m_KernelInfoMap[ kernel ];
+                    std::string demangledName = config().DemangleKernelNames ?
+                        demangle(kernelName) :
+                        kernelName;
 
-                    kernelInfo.KernelName = kernelName;
+                    kernelInfo.KernelName = demangledName;
 
                     kernelInfo.ProgramHash = programInfo.ProgramHash;
                     kernelInfo.OptionsHash = programInfo.OptionsHash;
@@ -6511,7 +6832,7 @@ void CLIntercept::addKernelInfo(
                     kernelInfo.ProgramNumber = programInfo.ProgramNumber;
                     kernelInfo.CompileCount = programInfo.CompileCount - 1;
 
-                    addShortKernelName( kernelName );
+                    addShortKernelName( demangledName );
                 }
 
                 delete [] kernelName;
@@ -6700,8 +7021,41 @@ void CLIntercept::checkRemoveCommandBufferInfo(
             if( errorCode == CL_SUCCESS && refCount == 1 )
             {
                 m_CommandBufferInfoMap.erase( iter );
+
+                CCommandBufferMutableCommandsMap::iterator cmditer =
+                    m_CommandBufferMutableCommandsMap.find( cmdbuf );
+                if( cmditer != m_CommandBufferMutableCommandsMap.end() )
+                {
+                    CMutableCommandList&    cmdList = cmditer->second;
+                    for( auto cmd : cmdList )
+                    {
+                        m_MutableCommandInfoMap.erase(cmd);
+                    }
+
+                    m_CommandBufferMutableCommandsMap.erase(cmditer);
+                }
             }
         }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//
+void CLIntercept::addMutableCommandInfo(
+    cl_mutable_command_khr cmd,
+    cl_command_buffer_khr cmdbuf,
+    cl_uint dim )
+{
+    if( cmd && cmdbuf )
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+
+        SMutableCommandInfo& info = m_MutableCommandInfoMap[cmd];
+
+        info.Platform = getPlatform(cmdbuf);
+        info.WorkDim = dim;
+
+        m_CommandBufferMutableCommandsMap[cmdbuf].push_back(cmd);
     }
 }
 
@@ -6878,6 +7232,9 @@ void CLIntercept::addImage(
         size_t  depth = 0;
         size_t  arraySize = 0;
         size_t  elementSize = 0;
+        size_t  rowPitch = 0;
+        size_t  slicePitch = 0;
+        cl_image_format format;
 
         errorCode |= dispatch().clGetImageInfo(
             image,
@@ -6909,6 +7266,24 @@ void CLIntercept::addImage(
             sizeof(elementSize),
             &elementSize,
             NULL );
+        errorCode |= dispatch().clGetImageInfo(
+            image,
+            CL_IMAGE_ROW_PITCH,
+            sizeof(rowPitch),
+            &rowPitch,
+            nullptr );
+        errorCode |= dispatch().clGetImageInfo(
+            image,
+            CL_IMAGE_SLICE_PITCH,
+            sizeof(slicePitch),
+            &slicePitch,
+            nullptr );
+        errorCode |= dispatch().clGetImageInfo(
+            image,
+            CL_IMAGE_FORMAT,
+            sizeof(cl_image_format),
+            &format,
+            nullptr );
 
         if( errorCode == CL_SUCCESS )
         {
@@ -6920,10 +7295,12 @@ void CLIntercept::addImage(
                 if( arraySize == 0 )
                 {
                     imageInfo.Region[1] = 1;            // 1D image
+                    imageInfo.ImageType = CL_MEM_OBJECT_IMAGE1D;
                 }
                 else
                 {
                     imageInfo.Region[1] = arraySize;    // 1D image array
+                    imageInfo.ImageType = CL_MEM_OBJECT_IMAGE1D_ARRAY;
                 }
             }
             else
@@ -6936,18 +7313,25 @@ void CLIntercept::addImage(
                 if( arraySize == 0 )
                 {
                     imageInfo.Region[2] = 1;            // 2D image
+                    imageInfo.ImageType = CL_MEM_OBJECT_IMAGE2D;
                 }
                 else
                 {
                     imageInfo.Region[2] = arraySize;    // 2D image array
+                    imageInfo.ImageType = CL_MEM_OBJECT_IMAGE2D_ARRAY;
                 }
             }
             else
             {
+                // What about an array of 3D images?
                 imageInfo.Region[2] = depth;            // 3D image
+                imageInfo.ImageType = CL_MEM_OBJECT_IMAGE3D;
             }
 
             imageInfo.ElementSize = elementSize;
+            imageInfo.Format = format;
+            imageInfo.RowPitch = rowPitch;
+            imageInfo.SlicePitch = slicePitch;
 
             m_MemAllocNumberMap[ image ] = m_MemAllocNumber;
             m_ImageInfoMap[ image ] = imageInfo;
@@ -7042,6 +7426,24 @@ void CLIntercept::setKernelArg(
     }
 }
 
+void CLIntercept::setKernelArg(
+    cl_kernel kernel,
+    cl_uint arg_index,
+    const void* arg_value,
+    size_t arg_size )
+{
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    if (arg_value != nullptr)
+    {
+        (m_KernelArgVectorMap[kernel])[arg_index] =
+            std::vector<unsigned char>(reinterpret_cast<const unsigned char*>(arg_value),
+                                       reinterpret_cast<const unsigned char*>(arg_value) + arg_size);
+        return;
+    }
+    // Run time __local buffers
+    (m_KernelArgLocalMap[kernel])[arg_index] = arg_size;
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 //
 void CLIntercept::setKernelArgSVMPointer(
@@ -7099,13 +7501,229 @@ void CLIntercept::setKernelArgUSMPointer(
     }
 }
 
+void CLIntercept::dumpKernelSourceOrDeviceBinary( cl_kernel kernel,
+                                                  uint64_t enqueueCounter,
+                                                  bool byKernelName )
+{
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    std::string fileNamePrefix = "";
+    OS().GetDumpDirectoryName( sc_DumpDirectoryName, fileNamePrefix );
+    fileNamePrefix += "/Replay/Enqueue_";
+    if (byKernelName)
+        fileNamePrefix += getShortKernelName(kernel);
+    else
+        fileNamePrefix += std::to_string(enqueueCounter);
+    fileNamePrefix += "/";
+    OS().MakeDumpDirectories( fileNamePrefix );
+
+    cl_program tmp_program;
+    dispatch().clGetKernelInfo(kernel, CL_KERNEL_PROGRAM, sizeof(cl_program), &tmp_program, nullptr);
+
+    size_t size = 0;
+    dispatch().clGetProgramInfo(tmp_program, CL_PROGRAM_SOURCE, sizeof(char*), nullptr, &size);
+
+    std::string sourceCode(size, ' ');
+    int error = dispatch().clGetProgramInfo(tmp_program, CL_PROGRAM_SOURCE, size, &sourceCode[0], nullptr);
+
+    if (error == CL_SUCCESS && size > 1)
+    {
+        std::ofstream output(fileNamePrefix + "kernel.cl", std::ios::out | std::ios::binary);
+        output.write(sourceCode.c_str(), size);
+        return;
+    }
+
+    log("[[Warning]]: Kernel source is not available! Make sure that the kernel is compiled from source (and is not cached)\n");
+    log("Now will try to output binaries, these probably won't work on other platforms!\n");
+
+    cl_uint num_devices;
+    dispatch().clGetProgramInfo(tmp_program, CL_PROGRAM_NUM_DEVICES, sizeof(cl_uint), &num_devices, nullptr);
+
+    // Grab the device ids
+    std::vector<cl_device_id> devices(num_devices);
+
+    dispatch().clGetProgramInfo(tmp_program, CL_PROGRAM_DEVICES, num_devices * sizeof(cl_device_id), devices.data(), 0);
+
+    std::vector<size_t> sizes(num_devices);
+    dispatch().clGetProgramInfo(tmp_program, CL_PROGRAM_BINARY_SIZES, sizeof(size_t) * sizes.size(), sizes.data(), nullptr);
+
+    std::vector<std::vector<unsigned char>> binaries;
+    std::vector<unsigned char *> binariesDatas;
+    for (size_t device = 0; device != num_devices; ++device)
+    {
+        std::vector<unsigned char> binary(sizes[device]);
+        binaries.emplace_back(binary);
+        binariesDatas.emplace_back(binaries[device].data());
+    }
+
+    error = dispatch().clGetProgramInfo(tmp_program, CL_PROGRAM_BINARIES, binariesDatas.size() * sizeof(unsigned char*), binariesDatas.data(), nullptr);
+
+    for (size_t device = 0; device != num_devices; ++device)
+    {
+        std::ofstream output(fileNamePrefix + "DeviceBinary" + std::to_string(device) + ".bin", std::ios::out | std::ios::binary);
+        output.write(reinterpret_cast<char const*>(binaries[device].data()), binaries[device].size());
+    }
+}
+
+void CLIntercept::dumpKernelInfo(
+    cl_kernel kernel,
+    uint64_t enqueueCounter,
+    size_t work_dim,
+    const size_t* gws_offset,
+    const size_t* gws,
+    const size_t* lws,
+    bool byKernelName)
+{
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    std::string fileNamePrefix = "";
+    OS().GetDumpDirectoryName( sc_DumpDirectoryName, fileNamePrefix );
+    fileNamePrefix += "/Replay/Enqueue_";
+    if (byKernelName)
+        fileNamePrefix += getShortKernelName(kernel);
+    else
+        fileNamePrefix += std::to_string(enqueueCounter);
+    fileNamePrefix += "/";
+    OS().MakeDumpDirectories( fileNamePrefix );
+    std::ofstream output{fileNamePrefix + "worksizes.txt"};
+
+    // Print the values of the worksizes and offsets on a line in the order:
+    // gws
+    // lws
+    // gws_offset
+    for (unsigned idx = 0; idx != work_dim; ++idx)
+    {
+        output << (!gws        ? 0 : gws[idx]) << ' ';
+    }
+    output << '\n';
+
+    for (unsigned idx = 0; idx != work_dim; ++idx)
+    {
+        output << (!lws        ? 0 : lws[idx]) << ' ';
+    }
+    output << '\n';
+
+    for (unsigned idx = 0; idx != work_dim; ++idx)
+    {
+        output << (!gws_offset ? 0 : gws_offset[idx]) << ' ';
+    }
+    output << '\n';
+
+    cl_program tmp_program;
+    dispatch().clGetKernelInfo(kernel, CL_KERNEL_PROGRAM, sizeof(cl_program), &tmp_program, nullptr);
+
+    cl_context context;
+    dispatch().clGetProgramInfo(tmp_program, CL_PROGRAM_CONTEXT, sizeof(cl_context), &context, nullptr);
+
+    cl_device_id device_ids;
+    dispatch().clGetContextInfo(context, CL_CONTEXT_DEVICES, sizeof(cl_context_info*), &device_ids, nullptr);
+
+    size_t sizeOfOptions = 0;
+    dispatch().clGetProgramBuildInfo(tmp_program, device_ids,
+                                                 CL_PROGRAM_BUILD_OPTIONS, sizeof(char*), nullptr, &sizeOfOptions);
+
+    std::string optionsString(sizeOfOptions, ' ');
+    dispatch().clGetProgramBuildInfo(tmp_program, device_ids,
+                                                 CL_PROGRAM_BUILD_OPTIONS, sizeOfOptions, &optionsString[0], &sizeOfOptions);
+
+    std::ofstream outputBuildOptions{fileNamePrefix + "buildOptions.txt", std::ios::out | std::ios::binary};
+    outputBuildOptions.write(optionsString.c_str(), optionsString.length() - 1);
+
+    std::string knlName = getShortKernelName(kernel);
+    std::ofstream outputKnlName{fileNamePrefix + "knlName.txt"};
+    outputKnlName << knlName;
+
+    const char* pPythonScript = NULL;
+    size_t pythonScriptLength = 0;
+    if( m_OS.GetReplayScriptString(
+            pPythonScript,
+            pythonScriptLength ) )
+    {
+        std::ofstream outputPythonScript{fileNamePrefix + "run.py", std::ios::out | std::ios::binary};
+        outputPythonScript.write(pPythonScript, pythonScriptLength);
+    }
+
+    std::ofstream outputKernelNumber{fileNamePrefix + "enqueueNumber.txt"};
+    outputKernelNumber << std::to_string(enqueueCounter) << '\n';
+
+    cl_uint numArgs = 0;
+    dispatch().clGetKernelInfo(kernel, CL_KERNEL_NUM_ARGS, sizeof(cl_uint), &numArgs, nullptr);
+
+    std::ofstream outputArgTypes{fileNamePrefix + "ArgumentDataTypes.txt"};
+    for ( cl_uint idx = 0; idx != numArgs; ++idx )
+    {
+        size_t argNameSize = 0;
+        dispatch().clGetKernelArgInfo(kernel, idx, CL_KERNEL_ARG_TYPE_NAME, 0, nullptr, &argNameSize);
+
+        std::string argName(argNameSize, ' ');
+        int error = dispatch().clGetKernelArgInfo(kernel, idx, CL_KERNEL_ARG_TYPE_NAME, argNameSize, &argName[0], nullptr);
+        if ( error == CL_KERNEL_ARG_INFO_NOT_AVAILABLE )
+        {
+            log("Note: Kernel Argument info not available for replaying.\n");
+            return;
+        }
+        outputArgTypes << argName << '\n';
+    }
+}
+
+void CLIntercept::dumpArgumentsForKernel(
+        cl_kernel kernel,
+        uint64_t enqueueCounter,
+        bool byKernelName )
+{
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    std::string fileNamePrefix;
+    OS().GetDumpDirectoryName( sc_DumpDirectoryName, fileNamePrefix );
+    fileNamePrefix += "/Replay/Enqueue_";
+    if( byKernelName )
+    {
+        fileNamePrefix += getShortKernelName(kernel);
+    }
+    else
+    {
+        fileNamePrefix += std::to_string(enqueueCounter);
+    }
+    fileNamePrefix += "/";
+    OS().MakeDumpDirectories( fileNamePrefix );
+
+    const auto& argumentVectorMap = m_KernelArgVectorMap[kernel];
+    for( const auto& arg: argumentVectorMap )
+    {
+        const auto pos = arg.first;
+        const auto& value = arg.second;
+        std::string fileName = fileNamePrefix + "Argument" + std::to_string(pos) + ".bin";
+        std::ofstream out{fileName, std::ios::out | std::ios::binary};
+        out.write(reinterpret_cast<char const*>(value.data()), value.size());
+    }
+
+    const auto& localMemSizes = m_KernelArgLocalMap[kernel];
+    for( const auto& arg: localMemSizes )
+    {
+        const auto pos = arg.first;
+        const auto value = arg.second;
+        std::string fileName = fileNamePrefix + "Local" + std::to_string(pos) + ".txt";
+        std::ofstream out{fileName};
+        out << std::to_string(value);
+    }
+
+    const auto& samplerValues = m_samplerKernelArgMap[kernel];
+    for( const auto& arg: samplerValues)
+    {
+        const auto pos = arg.first;
+        const auto& value = arg.second;
+        std::string fileName = fileNamePrefix + "Sampler" + std::to_string(pos) + ".txt";
+        std::ofstream out{fileName};
+        out << value;
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 //
 void CLIntercept::dumpBuffersForKernel(
     const std::string& name,
     const uint64_t enqueueCounter,
     cl_kernel kernel,
-    cl_command_queue command_queue )
+    cl_command_queue command_queue,
+    bool replay,
+    bool byKernelName )
 {
     std::lock_guard<std::mutex> lock(m_Mutex);
 
@@ -7114,17 +7732,35 @@ void CLIntercept::dumpBuffersForKernel(
     std::vector<char>   transferBuf;
     std::string fileNamePrefix = "";
 
-    // Get the dump directory name.
+    if (replay)
     {
         OS().GetDumpDirectoryName( sc_DumpDirectoryName, fileNamePrefix );
-        fileNamePrefix += "/memDump";
-        fileNamePrefix += name;
-        fileNamePrefix += "Enqueue/";
-    }
-
-    // Now make directories as appropriate.
-    {
+        fileNamePrefix += "/Replay/Enqueue_";
+        if (byKernelName)
+        {
+            fileNamePrefix += getShortKernelName(kernel);
+        }
+        else
+        {
+            fileNamePrefix += std::to_string(enqueueCounter);
+        }
+        fileNamePrefix += "/";
         OS().MakeDumpDirectories( fileNamePrefix );
+    }
+    else
+    {
+        // Get the dump directory name.
+        {
+            OS().GetDumpDirectoryName( sc_DumpDirectoryName, fileNamePrefix );
+            fileNamePrefix += "/memDump";
+            fileNamePrefix += name;
+            fileNamePrefix += "Enqueue/";
+        }
+
+        // Now make directories as appropriate.
+        {
+            OS().MakeDumpDirectories( fileNamePrefix );
+        }
     }
 
     CKernelArgMemMap&   kernelArgMemMap = m_KernelArgMap[ kernel ];
@@ -7143,44 +7779,50 @@ void CLIntercept::dumpBuffersForKernel(
             unsigned int        number = m_MemAllocNumberMap[ memobj ];
 
             std::string fileName = fileNamePrefix;
-            char    tmpStr[ MAX_PATH ];
-
-            // Add the enqueue count to file name
+            if (replay)
             {
-                CLI_SPRINTF( tmpStr, MAX_PATH, "%04u",
-                    (unsigned int)enqueueCounter );
-
-                fileName += "Enqueue_";
-                fileName += tmpStr;
+                fileName += "Buffer" + std::to_string(arg_index) + ".bin";
             }
-
-            // Add the kernel name to the filename
+            else
             {
-                fileName += "_Kernel_";
-                fileName += getShortKernelName(kernel);
+                char    tmpStr[ MAX_PATH ];
+
+                // Add the enqueue count to file name
+                {
+                    CLI_SPRINTF( tmpStr, MAX_PATH, "%04u",
+                        (unsigned int)enqueueCounter );
+
+                    fileName += "Enqueue_";
+                    fileName += tmpStr;
+                }
+
+                // Add the kernel name to the filename
+                {
+                    fileName += "_Kernel_";
+                    fileName += getShortKernelName(kernel);
+                }
+
+                // Add the arg number to the file name
+                {
+                    CLI_SPRINTF( tmpStr, MAX_PATH, "%u", arg_index );
+
+                    fileName += "_Arg_";
+                    fileName += tmpStr;
+                }
+
+                // Add the buffer number to the file name
+                {
+                    CLI_SPRINTF( tmpStr, MAX_PATH, "%04u", number );
+
+                    fileName += "_Buffer_";
+                    fileName += tmpStr;
+                }
+
+                // Add extension to file name
+                {
+                    fileName += ".bin";
+                }
             }
-
-            // Add the arg number to the file name
-            {
-                CLI_SPRINTF( tmpStr, MAX_PATH, "%u", arg_index );
-
-                fileName += "_Arg_";
-                fileName += tmpStr;
-            }
-
-            // Add the buffer number to the file name
-            {
-                CLI_SPRINTF( tmpStr, MAX_PATH, "%04u", number );
-
-                fileName += "_Buffer_";
-                fileName += tmpStr;
-            }
-
-            // Add extension to file name
-            {
-                fileName += ".bin";
-            }
-
             // Dump the buffer contents to the file.
             if( m_USMAllocInfoMap.find( allocation ) != m_USMAllocInfoMap.end() )
             {
@@ -7322,18 +7964,40 @@ void CLIntercept::dumpImagesForKernel(
     const std::string& name,
     const uint64_t enqueueCounter,
     cl_kernel kernel,
-    cl_command_queue command_queue )
+    cl_command_queue command_queue,
+    bool replay,
+    bool byKernelName )
 {
     std::lock_guard<std::mutex> lock(m_Mutex);
 
     std::string fileNamePrefix = "";
 
     // Get the dump directory name.
+    if (replay)
     {
         OS().GetDumpDirectoryName( sc_DumpDirectoryName, fileNamePrefix );
-        fileNamePrefix += "/memDump";
-        fileNamePrefix += name;
-        fileNamePrefix += "Enqueue/";
+        fileNamePrefix += "/Replay/Enqueue_";
+        if (byKernelName)
+            fileNamePrefix += getShortKernelName(kernel);
+        else
+            fileNamePrefix += std::to_string(enqueueCounter);
+        fileNamePrefix += "/";
+        OS().MakeDumpDirectories( fileNamePrefix );
+    }
+    else
+    {
+        // Get the dump directory name.
+        {
+            OS().GetDumpDirectoryName( sc_DumpDirectoryName, fileNamePrefix );
+            fileNamePrefix += "/memDump";
+            fileNamePrefix += name;
+            fileNamePrefix += "Enqueue/";
+        }
+
+        // Now make directories as appropriate.
+        {
+            OS().MakeDumpDirectories( fileNamePrefix );
+        }
     }
 
     // Now make directories as appropriate.
@@ -7359,53 +8023,72 @@ void CLIntercept::dumpImagesForKernel(
             unsigned int        number = m_MemAllocNumberMap[ memobj ];
 
             std::string fileName = fileNamePrefix;
-            char    tmpStr[ MAX_PATH ];
-
-            // Add the enqueue count to file name
+            if (replay)
             {
-                CLI_SPRINTF( tmpStr, MAX_PATH, "%04u",
-                    (unsigned int)enqueueCounter );
+                fileName += "Image" + std::to_string(arg_index) + ".raw";
 
-                fileName += "Enqueue_";
-                fileName += tmpStr;
+                // write image meta data to file
+                std::ofstream metaData{fileNamePrefix + "Image_MetaData_" + std::to_string(arg_index) + ".txt"};
+                metaData << info.Region[0] << '\n'
+                         << info.Region[1] << '\n'
+                         << info.Region[2] << '\n'
+                         << info.ElementSize << '\n'
+                         << info.RowPitch << '\n'
+                         << info.SlicePitch << '\n'
+                         << info.Format.image_channel_data_type << '\n'
+                         << info.Format.image_channel_order << '\n'
+                         << static_cast<int>(info.ImageType);
             }
-
-            // Add the kernel name to the filename
+            else
             {
-                fileName += "_Kernel_";
-                fileName += getShortKernelName(kernel);
-            }
+                char    tmpStr[ MAX_PATH ];
 
-            // Add the arg number to the file name
-            {
-                CLI_SPRINTF( tmpStr, MAX_PATH, "%u", arg_index );
+                // Add the enqueue count to file name
+                {
+                    CLI_SPRINTF( tmpStr, MAX_PATH, "%04u",
+                        (unsigned int)enqueueCounter );
 
-                fileName += "_Arg_";
-                fileName += tmpStr;
-            }
+                    fileName += "Enqueue_";
+                    fileName += tmpStr;
+                }
 
-            // Add the image number to the file name
-            {
-                CLI_SPRINTF( tmpStr, MAX_PATH, "%04u", number );
+                // Add the kernel name to the filename
+                {
+                    fileName += "_Kernel_";
+                    fileName += getShortKernelName(kernel);
+                }
 
-                fileName += "_Image_";
-                fileName += tmpStr;
-            }
+                // Add the arg number to the file name
+                {
+                    CLI_SPRINTF( tmpStr, MAX_PATH, "%u", arg_index );
 
-            // Add the image dimensions to the file name
-            {
-                CLI_SPRINTF( tmpStr, MAX_PATH, "_%zux%zux%zu_%zubpp",
-                    info.Region[0],
-                    info.Region[1],
-                    info.Region[2],
-                    info.ElementSize * 8 );
+                    fileName += "_Arg_";
+                    fileName += tmpStr;
+                }
 
-                fileName += tmpStr;
-            }
+                // Add the image number to the file name
+                {
+                    CLI_SPRINTF( tmpStr, MAX_PATH, "%04u", number );
 
-            // Add extension to file name
-            {
-                fileName += ".raw";
+                    fileName += "_Image_";
+                    fileName += tmpStr;
+                }
+
+                // Add the image dimensions to the file name
+                {
+                    CLI_SPRINTF( tmpStr, MAX_PATH, "_%zux%zux%zu_%zubpp",
+                        info.Region[0],
+                        info.Region[1],
+                        info.Region[2],
+                        info.ElementSize * 8 );
+
+                    fileName += tmpStr;
+                }
+
+                // Add extension to file name
+                {
+                    fileName += ".raw";
+                }
             }
 
             // Dump the image contents to the file.
@@ -7459,6 +8142,13 @@ void CLIntercept::dumpImagesForKernel(
     }
 }
 
+void CLIntercept::saveSampler(cl_kernel kernel, cl_uint arg_index, std::string const& sampler)
+{
+    std::unique_lock<std::mutex> lock(m_Mutex);
+    auto& samplerArgMap = m_samplerKernelArgMap[kernel];
+    samplerArgMap[arg_index] = sampler;
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 //
 void CLIntercept::dumpArgument(
@@ -7466,7 +8156,7 @@ void CLIntercept::dumpArgument(
     cl_kernel kernel,
     cl_int arg_index,
     size_t size,
-    const void *pBuffer )
+    const void *pBuffer)
 {
     if( kernel )
     {
@@ -7681,6 +8371,43 @@ void CLIntercept::dumpBuffer(
                     NULL );
             }
         }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//
+void CLIntercept::addMapPointer(
+    const void* ptr,
+    const cl_map_flags flags,
+    const size_t size )
+{
+    if( ptr )
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+
+        if( m_MapPointerInfoMap.find(ptr) != m_MapPointerInfoMap.end() )
+        {
+            log( "Ignoring duplicate mapped pointer.\n" );
+        }
+        else
+        {
+            SMapPointerInfo&    mapPointerInfo = m_MapPointerInfoMap[ptr];
+
+            mapPointerInfo.Flags = flags;
+            mapPointerInfo.Size = size;
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//
+void CLIntercept::removeMapPointer(
+    const void* ptr )
+{
+    if( ptr )
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        m_MapPointerInfoMap.erase(ptr);
     }
 }
 
@@ -8360,7 +9087,7 @@ void CLIntercept::initPrecompiledKernelOverrides(
         const char* pProgramString = NULL;
         size_t  programStringLength = 0;
 
-        // Get the program string from the resource embedded into this DLL.
+        // Get the precompiled kernel string.
         if( errorCode == CL_SUCCESS )
         {
             if( m_OS.GetPrecompiledKernelString(
@@ -8574,7 +9301,7 @@ void CLIntercept::initBuiltinKernelOverrides(
         const char* pProgramString = NULL;
         size_t  programStringLength = 0;
 
-        // Get the program string from the resource embedded into this DLL.
+        // Get the builtin kernel program string.
         if( errorCode == CL_SUCCESS )
         {
             if( m_OS.GetBuiltinKernelString(
@@ -10183,6 +10910,18 @@ bool CLIntercept::overrideGetDeviceInfo(
             errorCode = writeStringToMemory(
                 param_value_size,
                 m_Config.DeviceCVersion,
+                param_value_size_ret,
+                ptr );
+            override = true;
+        }
+        break;
+    case CL_DEVICE_IL_VERSION:
+        if( m_Config.DeviceILVersion != "" )
+        {
+            char*   ptr = (char*)param_value;
+            errorCode = writeStringToMemory(
+                param_value_size,
+                m_Config.DeviceILVersion,
                 param_value_size_ret,
                 ptr );
             override = true;
@@ -12067,7 +12806,7 @@ void* CLIntercept::getExtensionFunctionAddress(
     // don't need to look it up per-platform.
     CHECK_RETURN_ICD_LOADER_EXTENSION_FUNCTION( clGetGLContextInfoKHR );
 
-#if defined(_WIN32) || defined(__linux__)
+#if defined(_WIN32) || defined(__linux__) || defined(__FreeBSD__)
     CHECK_RETURN_ICD_LOADER_EXTENSION_FUNCTION( clCreateFromGLBuffer );
     CHECK_RETURN_ICD_LOADER_EXTENSION_FUNCTION( clCreateFromGLTexture );
     CHECK_RETURN_ICD_LOADER_EXTENSION_FUNCTION( clCreateFromGLTexture2D );
@@ -12117,8 +12856,17 @@ void* CLIntercept::getExtensionFunctionAddress(
     CHECK_RETURN_EXTENSION_FUNCTION( clCommandCopyImageToBufferKHR );
     CHECK_RETURN_EXTENSION_FUNCTION( clCommandFillBufferKHR );
     CHECK_RETURN_EXTENSION_FUNCTION( clCommandFillImageKHR );
+    CHECK_RETURN_EXTENSION_FUNCTION( clCommandSVMMemcpyKHR );
+    CHECK_RETURN_EXTENSION_FUNCTION( clCommandSVMMemFillKHR );
     CHECK_RETURN_EXTENSION_FUNCTION( clCommandNDRangeKernelKHR );
     CHECK_RETURN_EXTENSION_FUNCTION( clGetCommandBufferInfoKHR );
+
+    // cl_khr_command_buffer_multi_device
+    CHECK_RETURN_EXTENSION_FUNCTION( clRemapCommandBufferKHR );
+
+    // cl_khr_command_buffer_mutable_dispatch
+    CHECK_RETURN_EXTENSION_FUNCTION( clUpdateMutableCommandsKHR );
+    CHECK_RETURN_EXTENSION_FUNCTION( clGetMutableCommandInfoKHR );
 
     // cl_khr_create_command_queue
     CHECK_RETURN_EXTENSION_FUNCTION( clCreateCommandQueueWithPropertiesKHR );
@@ -12250,7 +12998,10 @@ void CLIntercept::log( const std::string& s )
         if( m_Config.LogToFile )
         {
             m_InterceptLog << logString;
-            m_InterceptLog.flush();
+            if( m_Config.FlushFiles )
+            {
+                m_InterceptLog.flush();
+            }
         }
         if( m_Config.LogToDebugger )
         {
@@ -12428,7 +13179,7 @@ void CLIntercept::logDeviceInfo( cl_device_id device )
 
 ///////////////////////////////////////////////////////////////////////////////
 //
-#if defined(_WIN32) || defined(__linux__)
+#if defined(_WIN32) || defined(__linux__) || defined(__FreeBSD__)
 #define INIT_EXPORTED_FUNC(funcname)                                        \
 {                                                                           \
     void* func = OS().GetFunctionPointer(m_OpenCLLibraryHandle, #funcname); \
@@ -12533,7 +13284,7 @@ bool CLIntercept::initDispatch( const std::string& libName )
         // The entry points for this extension are exported from the ICD
         // loader even though they are extension APIs.
         INIT_EXPORTED_FUNC( clGetGLContextInfoKHR );
-#if defined(_WIN32) || defined(__linux__)
+#if defined(_WIN32) || defined(__linux__) || defined(__FreeBSD__)
         INIT_EXPORTED_FUNC( clCreateFromGLBuffer );
         INIT_EXPORTED_FUNC( clCreateFromGLTexture );
         INIT_EXPORTED_FUNC( clCreateFromGLTexture2D );
@@ -13060,70 +13811,32 @@ void CLIntercept::chromeCallLoggingExit(
     // This will name the thread if it is not named already.
     getThreadNumber( threadId );
 
-    using us = std::chrono::microseconds;
-    uint64_t    usStart =
-        std::chrono::duration_cast<us>(tickStart - m_StartTime).count();
-    uint64_t    usDelta =
-        std::chrono::duration_cast<us>(tickEnd - tickStart).count();
-
-    // Notes for the future:
-    // Printing into a pre-allocated string buffer and then writing is
-    // measured to be faster than calling fprintf or stream insertion
-    // operators.
-    // Handling each of these four cases separately eliminates the need
-    // to concatenate strings and reduces overhead.
+    using ns = std::chrono::nanoseconds;
+    uint64_t    nsStart =
+        std::chrono::duration_cast<ns>(tickStart - m_StartTime).count();
+    uint64_t    nsDelta =
+        std::chrono::duration_cast<ns>(tickEnd - tickStart).count();
 
     if( !tag.empty() && includeId )
     {
-        int size = CLI_SPRINTF(m_StringBuffer, CLI_STRING_BUFFER_SIZE,
-            "{\"ph\":\"X\",\"pid\":%" PRIu64 ",\"tid\":%" PRIu64 ",\"name\":\"%s( %s )\""
-            ",\"ts\":%" PRIu64 ",\"dur\":%" PRIu64 ",\"args\":{\"id\":%" PRIu64 "}},\n",
-            m_ProcessId,
-            threadId,
-            functionName,
-            tag.c_str(),
-            usStart,
-            usDelta,
-            enqueueCounter );
-        m_InterceptTrace.write(m_StringBuffer, size);
+        m_ChromeTrace.addCallLogging( functionName, tag, threadId, nsStart, nsDelta, enqueueCounter );
     }
     else if( !tag.empty() )
     {
-        int size = CLI_SPRINTF(m_StringBuffer, CLI_STRING_BUFFER_SIZE,
-            "{\"ph\":\"X\",\"pid\":%" PRIu64 ",\"tid\":%" PRIu64 ",\"name\":\"%s( %s )\""
-            ",\"ts\":%" PRIu64 ",\"dur\":%" PRIu64 "},\n",
-            m_ProcessId,
-            threadId,
-            functionName,
-            tag.c_str(),
-            usStart,
-            usDelta );
-        m_InterceptTrace.write(m_StringBuffer, size);
+        m_ChromeTrace.addCallLogging( functionName, tag, threadId, nsStart, nsDelta );
     }
     else if( includeId )
     {
-        int size = CLI_SPRINTF(m_StringBuffer, CLI_STRING_BUFFER_SIZE,
-            "{\"ph\":\"X\",\"pid\":%" PRIu64 ",\"tid\":%" PRIu64 ",\"name\":\"%s\""
-            ",\"ts\":%" PRIu64 ",\"dur\":%" PRIu64 ",\"args\":{\"id\":%" PRIu64 "}},\n",
-            m_ProcessId,
-            threadId,
-            functionName,
-            usStart,
-            usDelta,
-            enqueueCounter );
-        m_InterceptTrace.write(m_StringBuffer, size);
+        m_ChromeTrace.addCallLogging( functionName, threadId, nsStart, nsDelta, enqueueCounter );
     }
     else
     {
-        int size = CLI_SPRINTF(m_StringBuffer, CLI_STRING_BUFFER_SIZE,
-            "{\"ph\":\"X\",\"pid\":%" PRIu64 ",\"tid\":%" PRIu64 ",\"name\":\"%s\""
-            ",\"ts\":%" PRIu64 ",\"dur\":%" PRIu64 "},\n",
-            m_ProcessId,
-            threadId,
-            functionName,
-            usStart,
-            usDelta );
-        m_InterceptTrace.write(m_StringBuffer, size);
+        m_ChromeTrace.addCallLogging( functionName, threadId, nsStart, nsDelta );
+    }
+
+    if( m_Config.FlushFiles )
+    {
+        m_ChromeTrace.flush();
     }
 }
 
@@ -13218,16 +13931,7 @@ void CLIntercept::chromeRegisterCommandQueue(
             }
         }
 
-        m_InterceptTrace
-            << "{\"ph\":\"M\", \"name\":\"thread_name\", \"pid\":" << m_ProcessId
-            << ", \"tid\":-" << queueNumber
-            << ", \"args\":{\"name\":\"" << trackName
-            << "\"}},\n";
-        m_InterceptTrace
-            << "{\"ph\":\"M\", \"name\":\"thread_sort_index\", \"pid\":" << m_ProcessId
-            << ", \"tid\":-" << queueNumber
-            << ", \"args\":{\"sort_index\":\"" << queueNumber
-            << "\"}},\n";
+        m_ChromeTrace.addQueueMetadata( queueNumber, trackName );
     }
 }
 
@@ -13282,96 +13986,49 @@ void CLIntercept::chromeTraceEvent(
     //        deltaNS, deltaNS / 1000.0 );
     //}
 
+    const uint64_t  nsQueued = normalizedQueuedTimeNS;
+    const uint64_t  nsSubmit =
+        commandSubmit - commandQueued + normalizedQueuedTimeNS;
+    const uint64_t  nsStart =
+        commandStart - commandQueued + normalizedQueuedTimeNS;
+    const uint64_t  nsEnd =
+        commandEnd - commandQueued + normalizedQueuedTimeNS;
+
     if( m_Config.ChromePerformanceTimingInStages )
     {
-        const size_t cNumStates = 3;
-        const std::string   colours[cNumStates] = {
-            "thread_state_runnable",
-            "cq_build_running",
-            "thread_state_iowait"
-        };
-        const std::string   suffixes[cNumStates] = {
-            "(Queued)",
-            "(Submitted)",
-            "(Execution)"
-        };
-        const uint64_t  usStarts[cNumStates] = {
-            normalizedQueuedTimeNS / 1000,
-            (commandSubmit - commandQueued + normalizedQueuedTimeNS) / 1000,
-            (commandStart - commandQueued + normalizedQueuedTimeNS) / 1000
-        };
-        const uint64_t  usDeltas[cNumStates] = {
-            (commandSubmit - commandQueued) / 1000,
-            (commandStart - commandSubmit) / 1000,
-            (commandEnd - commandStart) / 1000
-        };
-
-        for( size_t state = 0; state < cNumStates; state++ )
+        if( m_Config.ChromePerformanceTimingPerKernel )
         {
-            if( m_Config.ChromePerformanceTimingPerKernel )
-            {
-                int size = CLI_SPRINTF(m_StringBuffer, CLI_STRING_BUFFER_SIZE,
-                    "{\"ph\":\"X\",\"pid\":%" PRIu64 ",\"tid\":\"%s\",\"name\":\"%s %s\""
-                    ",\"ts\":%" PRIu64 ",\"dur\":%" PRIu64 ",\"cname\":\"%s\",\"args\":{\"id\":%" PRIu64 "}},\n",
-                    m_ProcessId,
-                    name.c_str(),
-                    name.c_str(),
-                    suffixes[state].c_str(),
-                    usStarts[state],
-                    usDeltas[state],
-                    colours[state].c_str(),
-                    enqueueCounter );
-                m_InterceptTrace.write(m_StringBuffer, size);
-            }
-            else
-            {
-                int size = CLI_SPRINTF(m_StringBuffer, CLI_STRING_BUFFER_SIZE,
-                    "{\"ph\":\"X\",\"pid\":%" PRIu64 ",\"tid\":%u.%u,\"name\":\"%s %s\""
-                    ",\"ts\":%" PRIu64 ",\"dur\":%" PRIu64 ",\"cname\":\"%s\",\"args\":{\"id\":%" PRIu64 "}},\n",
-                    m_ProcessId,
-                    m_EventsChromeTraced,
-                    queueNumber,
-                    name.c_str(),
-                    suffixes[state].c_str(),
-                    usStarts[state],
-                    usDeltas[state],
-                    colours[state].c_str(),
-                    enqueueCounter );
-                m_InterceptTrace.write(m_StringBuffer, size);
-            }
+            m_ChromeTrace.addDeviceTiming(
+                name,
+                nsQueued,
+                nsSubmit,
+                nsStart,
+                nsEnd,
+                enqueueCounter );
+        }
+        else
+        {
+            m_ChromeTrace.addDeviceTiming(
+                name,
+                m_EventsChromeTraced,
+                queueNumber,
+                nsQueued,
+                nsSubmit,
+                nsStart,
+                nsEnd,
+                enqueueCounter );
         }
         m_EventsChromeTraced++;
     }
     else
     {
-        const uint64_t  usStart =
-            (commandStart - commandQueued + normalizedQueuedTimeNS) / 1000;
-        const uint64_t  usDelta = ( commandEnd - commandStart ) / 1000;
         if( m_Config.ChromePerformanceTimingPerKernel )
         {
-            int size = CLI_SPRINTF(m_StringBuffer, CLI_STRING_BUFFER_SIZE,
-                "{\"ph\":\"X\",\"pid\":%" PRIu64 ",\"tid\":\"%s\",\"name\":\"%s\""
-                ",\"ts\":%" PRIu64 ",\"dur\":%" PRIu64 ",\"args\":{\"id\":%" PRIu64 "}},\n",
-                m_ProcessId,
-                name.c_str(),
-                name.c_str(),
-                usStart,
-                usDelta,
-                enqueueCounter );
-            m_InterceptTrace.write(m_StringBuffer, size);
+            m_ChromeTrace.addDeviceTiming( name, nsStart, nsEnd, enqueueCounter );
         }
         else
         {
-            int size = CLI_SPRINTF(m_StringBuffer, CLI_STRING_BUFFER_SIZE,
-                "{\"ph\":\"X\",\"pid\":%" PRIu64 ",\"tid\":-%u,\"name\":\"%s\""
-                ",\"ts\":%" PRIu64 ",\"dur\":%" PRIu64 ",\"args\":{\"id\":%" PRIu64 "}},\n",
-                m_ProcessId,
-                queueNumber,
-                name.c_str(),
-                usStart,
-                usDelta,
-                enqueueCounter );
-            m_InterceptTrace.write(m_StringBuffer, size);
+            m_ChromeTrace.addDeviceTiming( name, queueNumber, nsStart, nsEnd, enqueueCounter );
         }
     }
 }

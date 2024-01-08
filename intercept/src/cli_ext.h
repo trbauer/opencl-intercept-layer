@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2018-2022 Intel Corporation
+// Copyright (c) 2018-2024 Intel Corporation
 //
 // SPDX-License-Identifier: MIT
 */
@@ -13,7 +13,7 @@ extern "C" {
 ///////////////////////////////////////////////////////////////////////////////
 // cl_khr_command_buffer
 
-// Note: This implements the provisional extension v0.9.0.
+// Note: This implements the provisional extension v0.9.2.
 
 typedef cl_bitfield         cl_device_command_buffer_capabilities_khr;
 typedef struct _cl_command_buffer_khr* cl_command_buffer_khr;
@@ -45,6 +45,7 @@ typedef struct _cl_mutable_command_khr* cl_mutable_command_khr;
 #define CL_COMMAND_BUFFER_REFERENCE_COUNT_KHR               0x1296
 #define CL_COMMAND_BUFFER_STATE_KHR                         0x1297
 #define CL_COMMAND_BUFFER_PROPERTIES_ARRAY_KHR              0x1298
+#define CL_COMMAND_BUFFER_CONTEXT_KHR                       0x1299
 
 #define CL_COMMAND_BUFFER_STATE_RECORDING_KHR               0
 #define CL_COMMAND_BUFFER_STATE_EXECUTABLE_KHR              1
@@ -192,6 +193,31 @@ clCommandFillImageKHR(
     cl_mutable_command_khr* mutable_handle) ;
 
 extern CL_API_ENTRY cl_int CL_API_CALL
+clCommandSVMMemcpyKHR(
+    cl_command_buffer_khr command_buffer,
+    cl_command_queue command_queue,
+    void* dst_ptr,
+    const void* src_ptr,
+    size_t size,
+    cl_uint num_sync_points_in_wait_list,
+    const cl_sync_point_khr* sync_point_wait_list,
+    cl_sync_point_khr* sync_point,
+    cl_mutable_command_khr* mutable_handle);
+
+extern CL_API_ENTRY cl_int CL_API_CALL
+clCommandSVMMemFillKHR(
+    cl_command_buffer_khr command_buffer,
+    cl_command_queue command_queue,
+    void* svm_ptr,
+    const void* pattern,
+    size_t pattern_size,
+    size_t size,
+    cl_uint num_sync_points_in_wait_list,
+    const cl_sync_point_khr* sync_point_wait_list,
+    cl_sync_point_khr* sync_point,
+    cl_mutable_command_khr* mutable_handle);
+
+extern CL_API_ENTRY cl_int CL_API_CALL
 clCommandNDRangeKernelKHR(
     cl_command_buffer_khr command_buffer,
     cl_command_queue command_queue,
@@ -210,6 +236,115 @@ extern CL_API_ENTRY cl_int CL_API_CALL
 clGetCommandBufferInfoKHR(
     cl_command_buffer_khr command_buffer,
     cl_command_buffer_info_khr param_name,
+    size_t param_value_size,
+    void* param_value,
+    size_t* param_value_size_ret) ;
+
+///////////////////////////////////////////////////////////////////////////////
+// cl_khr_command_buffer_multi_device
+
+// Note: This implements the provisional extension v0.9.0.
+
+typedef cl_bitfield         cl_platform_command_buffer_capabilities_khr;
+
+#define CL_PLATFORM_COMMAND_BUFFER_CAPABILITIES_KHR         0x0908
+#define CL_COMMAND_BUFFER_PLATFORM_UNIVERSAL_SYNC_KHR       (1 << 0)
+#define CL_COMMAND_BUFFER_PLATFORM_REMAP_QUEUES_KHR         (1 << 1)
+#define CL_COMMAND_BUFFER_PLATFORM_AUTOMATIC_REMAP_KHR      (1 << 2)
+
+#define CL_DEVICE_COMMAND_BUFFER_NUM_SYNC_DEVICES_KHR       0x12AB
+#define CL_DEVICE_COMMAND_BUFFER_SYNC_DEVICES_KHR           0x12AC
+
+#define CL_COMMAND_BUFFER_CAPABILITY_MULTIPLE_QUEUE_KHR     (1 << 4)
+
+#define CL_COMMAND_BUFFER_DEVICE_SIDE_SYNC_KHR              (1 << 2)
+
+extern CL_API_ENTRY cl_command_buffer_khr CL_API_CALL
+clRemapCommandBufferKHR(
+    cl_command_buffer_khr command_buffer,
+    cl_bool automatic,
+    cl_uint num_queues,
+    const cl_command_queue* queues,
+    cl_uint num_handles,
+    const cl_mutable_command_khr* handles,
+    cl_mutable_command_khr* handles_ret,
+    cl_int* errcode_ret) ;
+
+///////////////////////////////////////////////////////////////////////////////
+// cl_khr_command_buffer_mutable_dispatch
+
+// Note: This implements the provisional extension v0.9.0.
+
+typedef cl_uint             cl_command_buffer_structure_type_khr;
+typedef cl_bitfield         cl_mutable_dispatch_fields_khr;
+typedef cl_uint             cl_mutable_command_info_khr;
+typedef struct _cl_mutable_dispatch_arg_khr {
+    cl_uint arg_index;
+    size_t arg_size;
+    const void* arg_value;
+} cl_mutable_dispatch_arg_khr;
+typedef struct _cl_mutable_dispatch_exec_info_khr {
+    cl_uint param_name;
+    size_t param_value_size;
+    const void* param_value;
+} cl_mutable_dispatch_exec_info_khr;
+typedef struct _cl_mutable_dispatch_config_khr {
+    cl_command_buffer_structure_type_khr type;
+    const void* next;
+    cl_mutable_command_khr command;
+    cl_uint num_args;
+    cl_uint num_svm_args;
+    cl_uint num_exec_infos;
+    cl_uint work_dim;
+    const cl_mutable_dispatch_arg_khr* arg_list;
+    const cl_mutable_dispatch_arg_khr* arg_svm_list;
+    const cl_mutable_dispatch_exec_info_khr* exec_info_list;
+    const size_t* global_work_offset;
+    const size_t* global_work_size;
+    const size_t* local_work_size;
+} cl_mutable_dispatch_config_khr;
+typedef struct _cl_mutable_base_config_khr {
+    cl_command_buffer_structure_type_khr type;
+    const void* next;
+    cl_uint num_mutable_dispatch;
+    const cl_mutable_dispatch_config_khr* mutable_dispatch_list;
+} cl_mutable_base_config_khr;
+
+#define CL_COMMAND_BUFFER_MUTABLE_KHR                       (1 << 1)
+
+#define CL_INVALID_MUTABLE_COMMAND_KHR                      -1141
+
+#define CL_DEVICE_MUTABLE_DISPATCH_CAPABILITIES_KHR         0x12B0
+
+#define CL_MUTABLE_DISPATCH_UPDATABLE_FIELDS_KHR            0x12B1
+#define CL_MUTABLE_DISPATCH_GLOBAL_OFFSET_KHR               (1 << 0)
+#define CL_MUTABLE_DISPATCH_GLOBAL_SIZE_KHR                 (1 << 1)
+#define CL_MUTABLE_DISPATCH_LOCAL_SIZE_KHR                  (1 << 2)
+#define CL_MUTABLE_DISPATCH_ARGUMENTS_KHR                   (1 << 3)
+#define CL_MUTABLE_DISPATCH_EXEC_INFO_KHR                   (1 << 4)
+
+#define CL_MUTABLE_COMMAND_COMMAND_QUEUE_KHR                0x12A0
+#define CL_MUTABLE_COMMAND_COMMAND_BUFFER_KHR               0x12A1
+#define CL_MUTABLE_COMMAND_COMMAND_TYPE_KHR                 0x12AD
+#define CL_MUTABLE_DISPATCH_PROPERTIES_ARRAY_KHR            0x12A2
+#define CL_MUTABLE_DISPATCH_KERNEL_KHR                      0x12A3
+#define CL_MUTABLE_DISPATCH_DIMENSIONS_KHR                  0x12A4
+#define CL_MUTABLE_DISPATCH_GLOBAL_WORK_OFFSET_KHR          0x12A5
+#define CL_MUTABLE_DISPATCH_GLOBAL_WORK_SIZE_KHR            0x12A6
+#define CL_MUTABLE_DISPATCH_LOCAL_WORK_SIZE_KHR             0x12A7
+
+#define CL_STRUCTURE_TYPE_MUTABLE_BASE_CONFIG_KHR           0
+#define CL_STRUCTURE_TYPE_MUTABLE_DISPATCH_CONFIG_KHR       1
+
+extern CL_API_ENTRY cl_int CL_API_CALL
+clUpdateMutableCommandsKHR(
+    cl_command_buffer_khr command_buffer,
+    const cl_mutable_base_config_khr* mutable_config) ;
+
+extern CL_API_ENTRY cl_int CL_API_CALL
+clGetMutableCommandInfoKHR(
+    cl_mutable_command_khr command,
+    cl_mutable_command_info_khr param_name,
     size_t param_value_size,
     void* param_value,
     size_t* param_value_size_ret) ;
@@ -389,6 +524,15 @@ cl_int CL_API_CALL clEnqueueReleaseD3D11ObjectsKHR(
     cl_event* event);
 
 #endif
+
+///////////////////////////////////////////////////////////////////////////////
+// cl_khr_device_uuid
+
+#define CL_DEVICE_UUID_KHR                                  0x106A
+#define CL_DRIVER_UUID_KHR                                  0x106B
+#define CL_DEVICE_LUID_VALID_KHR                            0x106C
+#define CL_DEVICE_LUID_KHR                                  0x106D
+#define CL_DEVICE_NODE_MASK_KHR                             0x106E
 
 ///////////////////////////////////////////////////////////////////////////////
 // cl_khr_dx9_media_sharing
@@ -1620,6 +1764,11 @@ cl_int CL_API_CALL clGetKernelSuggestedLocalWorkSizeINTEL(
     const size_t *globalWorkOffset,
     const size_t *globalWorkSize,
     size_t *suggestedLocalWorkSize);
+
+///////////////////////////////////////////////////////////////////////////////
+// Unofficial cl_intel_maximum_registers extension:
+
+#define CL_KERNEL_REGISTER_COUNT_INTEL 0x425B
 
 #ifdef __cplusplus
 }

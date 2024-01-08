@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2018-2022 Intel Corporation
+// Copyright (c) 2018-2024 Intel Corporation
 //
 // SPDX-License-Identifier: MIT
 */
@@ -29,6 +29,10 @@ public:
                 size_t& length ) const;
 
     bool    GetBuiltinKernelString(
+                const char*& str,
+                size_t& length ) const;
+
+    bool    GetReplayScriptString(
                 const char*& str,
                 size_t& length ) const;
 
@@ -146,6 +150,40 @@ inline bool Services::GetBuiltinKernelString(
     return success;
 }
 
+inline bool Services::GetReplayScriptString(
+    const char*& str,
+    size_t& length ) const
+{
+    bool    success = false;
+
+    HRSRC hrsrc = ::FindResource(
+        m_hInstance,
+        MAKEINTRESOURCE(IDR_TEXT_REPLAY_SCRIPT),
+        "TEXT" );
+
+    if( hrsrc != NULL )
+    {
+        length = ::SizeofResource(
+            m_hInstance,
+            hrsrc );
+
+        HGLOBAL hres = ::LoadResource(
+            m_hInstance,
+            hrsrc );
+        if( hres != NULL )
+        {
+            void*   pVoid = ::LockResource( hres );
+            if( pVoid )
+            {
+                str = (const char*)pVoid;
+                success = true;
+            }
+        }
+    }
+
+    return success;
+}
+
 inline bool Services::ExecuteCommand( const std::string& command ) const
 {
     int res = system( command.c_str() );
@@ -157,7 +195,7 @@ static inline bool SetAubCaptureRegistryKeys(
     DWORD dwValue )
 {
     // For NEO AubCapture:
-    // As setup, need to set AUBDumpSubcaptureMode = 2.
+    // As setup, need to set AUBDumpSubCaptureMode = 2.
     // This will be the client's responsibility.
     //
     // To start/stop AubCapture:
@@ -297,9 +335,6 @@ inline bool Services::StopAubCaptureKDC(
     std::string command = "kdc.exe -off";
     int res = system(command.c_str());
     //fprintf(stderr, "Running the command: %s returned %d\n", command.c_str(), res );
-
-    // This is the newer NEO method of AubCapture:
-    bool success = SetAubCaptureRegistryKeys( "", 0 );
 
     return res != -1;
 }

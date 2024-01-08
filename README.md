@@ -42,6 +42,7 @@ Detailed instructions:
 * [How to Collect MDAPI Performance Metrics](docs/mdapi.md)
 * [How to Use the Intercept Layer for OpenCL Applications with VTune](docs/vtune_logging.md)
 * [How to Use the Intercept Layer for OpenCL Applications with Chrome](docs/chrome_tracing.md)
+* [How to Capture and Replay Single Kernels](docs/capture_single_kernels.md)
 
 ## Tutorial
 
@@ -92,7 +93,7 @@ OpenCL and the OpenCL logo are trademarks of Apple Inc. used by permission by Kh
 
 \* Other names and brands may be claimed as the property of others.
 
-Copyright (c) 2018-2022, Intel(R) Corporation
+Copyright (c) 2018-2024, Intel(R) Corporation
 
 [khronos_cl_license]: https://github.com/KhronosGroup/OpenCL-Headers/blob/main/LICENSE
 [boost_license]: http://www.boost.org/LICENSE_1_0.txt

@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2018-2022 Intel Corporation
+# Copyright (c) 2018-2024 Intel Corporation
 #
 # SPDX-License-Identifier: MIT
 #
@@ -116,8 +116,12 @@ For Windows:
 For Linux:
 
 - `./real_libOpenCL.so`
-- `/usr/lib/x86_64-linux-gnu/libOpenCL.so.1`
+- `/usr/lib/x86_64-linux-gnu/libOpenCL.so.1` (optional, for systems with a detected multi-arch specifier)
 - `/usr/lib/x86_64-linux-gnu/libOpenCL.so`
+- `/usr/lib/libOpenCL.so.1`
+- `/usr/lib/libOpenCL.so`
+- `/usr/local/lib/libOpenCL.so.1`
+- `/usr/local/lib/libOpenCL.so`
 - `/opt/intel/opencl/lib64/libOpenCL.so.1`
 - `/opt/intel/opencl/lib64/libOpenCL.so`
 - `/glob/development-tools/oneapi/inteloneapi/compiler/latest/linux/lib/libOpenCL.so.1`
@@ -146,7 +150,7 @@ def GetFooter():
 
 \* Other names and brands may be claimed as the property of others.
 
-Copyright (c) 2018-2022, Intel(R) Corporation
+Copyright (c) 2018-2024, Intel(R) Corporation
 """
 
 printHelp = False

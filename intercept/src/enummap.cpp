@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2018-2022 Intel Corporation
+// Copyright (c) 2018-2024 Intel Corporation
 //
 // SPDX-License-Identifier: MIT
 */
@@ -656,6 +656,13 @@ CEnumNameMap::CEnumNameMap()
     ADD_ENUM_NAME( m_cl_int, CL_COMMAND_RELEASE_D3D11_OBJECTS_KHR );
 #endif
 
+    // cl_khr_device_uuid
+    ADD_ENUM_NAME( m_cl_int, CL_DEVICE_UUID_KHR );
+    ADD_ENUM_NAME( m_cl_int, CL_DRIVER_UUID_KHR );
+    ADD_ENUM_NAME( m_cl_int, CL_DEVICE_LUID_VALID_KHR );
+    ADD_ENUM_NAME( m_cl_int, CL_DEVICE_LUID_KHR );
+    ADD_ENUM_NAME( m_cl_int, CL_DEVICE_NODE_MASK_KHR );
+
 #if defined(_WIN32)
     // cl_khr_dx9_media_sharing
     ADD_ENUM_NAME( m_cl_int, CL_INVALID_DX9_MEDIA_ADAPTER_KHR );
@@ -701,6 +708,7 @@ CEnumNameMap::CEnumNameMap()
     ADD_ENUM_NAME( m_cl_int, CL_COMMAND_BUFFER_REFERENCE_COUNT_KHR );
     ADD_ENUM_NAME( m_cl_int, CL_COMMAND_BUFFER_STATE_KHR );
     ADD_ENUM_NAME( m_cl_int, CL_COMMAND_BUFFER_PROPERTIES_ARRAY_KHR );
+    ADD_ENUM_NAME( m_cl_int, CL_COMMAND_BUFFER_CONTEXT_KHR );
 
     //CL_COMMAND_BUFFER_STATE_RECORDING_KHR               0
     //CL_COMMAND_BUFFER_STATE_EXECUTABLE_KHR              1
@@ -708,6 +716,47 @@ CEnumNameMap::CEnumNameMap()
     //CL_COMMAND_BUFFER_STATE_INVALID_KHR                 3
 
     ADD_ENUM_NAME( m_cl_int, CL_COMMAND_COMMAND_BUFFER_KHR );
+
+    // cl_khr_command_buffer_multi_device
+    ADD_ENUM_NAME( m_cl_int, CL_PLATFORM_COMMAND_BUFFER_CAPABILITIES_KHR );
+
+    ADD_ENUM_NAME( m_cl_platform_command_buffer_capabilities_khr, CL_COMMAND_BUFFER_PLATFORM_UNIVERSAL_SYNC_KHR );
+    ADD_ENUM_NAME( m_cl_platform_command_buffer_capabilities_khr, CL_COMMAND_BUFFER_PLATFORM_REMAP_QUEUES_KHR );
+    ADD_ENUM_NAME( m_cl_platform_command_buffer_capabilities_khr, CL_COMMAND_BUFFER_PLATFORM_AUTOMATIC_REMAP_KHR );
+
+    ADD_ENUM_NAME( m_cl_int, CL_DEVICE_COMMAND_BUFFER_NUM_SYNC_DEVICES_KHR );
+    ADD_ENUM_NAME( m_cl_int, CL_DEVICE_COMMAND_BUFFER_SYNC_DEVICES_KHR );
+
+    ADD_ENUM_NAME( m_cl_device_command_buffer_capabilities_khr, CL_COMMAND_BUFFER_CAPABILITY_MULTIPLE_QUEUE_KHR );
+
+    ADD_ENUM_NAME( m_cl_command_buffer_flags_khr, CL_COMMAND_BUFFER_DEVICE_SIDE_SYNC_KHR );
+
+    // cl_khr_command_buffer_mutable_dispatch
+    ADD_ENUM_NAME( m_cl_command_buffer_flags_khr, CL_COMMAND_BUFFER_MUTABLE_KHR );
+
+    ADD_ENUM_NAME( m_cl_int, CL_INVALID_MUTABLE_COMMAND_KHR );
+
+    ADD_ENUM_NAME( m_cl_int, CL_DEVICE_MUTABLE_DISPATCH_CAPABILITIES_KHR );
+
+    ADD_ENUM_NAME( m_cl_int, CL_MUTABLE_DISPATCH_UPDATABLE_FIELDS_KHR );
+    ADD_ENUM_NAME( m_cl_mutable_dispatch_fields_khr, CL_MUTABLE_DISPATCH_GLOBAL_OFFSET_KHR );
+    ADD_ENUM_NAME( m_cl_mutable_dispatch_fields_khr, CL_MUTABLE_DISPATCH_GLOBAL_SIZE_KHR );
+    ADD_ENUM_NAME( m_cl_mutable_dispatch_fields_khr, CL_MUTABLE_DISPATCH_LOCAL_SIZE_KHR );
+    ADD_ENUM_NAME( m_cl_mutable_dispatch_fields_khr, CL_MUTABLE_DISPATCH_ARGUMENTS_KHR );
+    ADD_ENUM_NAME( m_cl_mutable_dispatch_fields_khr, CL_MUTABLE_DISPATCH_EXEC_INFO_KHR );
+
+    ADD_ENUM_NAME( m_cl_int, CL_MUTABLE_COMMAND_COMMAND_QUEUE_KHR );
+    ADD_ENUM_NAME( m_cl_int, CL_MUTABLE_COMMAND_COMMAND_BUFFER_KHR );
+    ADD_ENUM_NAME( m_cl_int, CL_MUTABLE_COMMAND_COMMAND_TYPE_KHR );
+    ADD_ENUM_NAME( m_cl_int, CL_MUTABLE_DISPATCH_PROPERTIES_ARRAY_KHR );
+    ADD_ENUM_NAME( m_cl_int, CL_MUTABLE_DISPATCH_KERNEL_KHR );
+    ADD_ENUM_NAME( m_cl_int, CL_MUTABLE_DISPATCH_DIMENSIONS_KHR );
+    ADD_ENUM_NAME( m_cl_int, CL_MUTABLE_DISPATCH_GLOBAL_WORK_OFFSET_KHR );
+    ADD_ENUM_NAME( m_cl_int, CL_MUTABLE_DISPATCH_GLOBAL_WORK_SIZE_KHR );
+    ADD_ENUM_NAME( m_cl_int, CL_MUTABLE_DISPATCH_LOCAL_WORK_SIZE_KHR );
+
+    ADD_ENUM_NAME( m_cl_command_buffer_structure_type_khr, CL_STRUCTURE_TYPE_MUTABLE_BASE_CONFIG_KHR );
+    ADD_ENUM_NAME( m_cl_command_buffer_structure_type_khr, CL_STRUCTURE_TYPE_MUTABLE_DISPATCH_CONFIG_KHR );
 
     // cl_khr_extended_versioning extension
     // Most enums for this extension were added to OpenCL 3.0.

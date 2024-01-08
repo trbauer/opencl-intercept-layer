@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2018-2022 Intel Corporation
+// Copyright (c) 2018-2024 Intel Corporation
 //
 // SPDX-License-Identifier: MIT
 */
@@ -110,8 +110,11 @@ public:
     GENERATE_MAP_AND_BITFIELD_FUNC( name_device_usm_capabilities,    cl_device_unified_shared_memory_capabilities_intel );
     GENERATE_MAP_AND_BITFIELD_FUNC( name_mem_alloc_flags,            cl_mem_alloc_flags_intel        );
     GENERATE_MAP_AND_FUNC(          name_semaphore_type,             cl_semaphore_type_khr           );
+    GENERATE_MAP_AND_BITFIELD_FUNC( name_platform_command_buffer_capabilities, cl_platform_command_buffer_capabilities_khr );
     GENERATE_MAP_AND_BITFIELD_FUNC( name_device_command_buffer_capabilities, cl_device_command_buffer_capabilities_khr );
     GENERATE_MAP_AND_BITFIELD_FUNC( name_command_buffer_flags,       cl_command_buffer_flags_khr     );
+    GENERATE_MAP_AND_FUNC(          name_command_buffer_structure_type, cl_command_buffer_structure_type_khr );
+    GENERATE_MAP_AND_BITFIELD_FUNC( name_mutable_dispatch_fields,    cl_mutable_dispatch_fields_khr  );
 
     #undef GENERATE_MAP_AND_FUNC
     #undef GENERATE_MAP_AND_BITFIELD_FUNC

@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2018-2022 Intel Corporation
+// Copyright (c) 2018-2024 Intel Corporation
 //
 // SPDX-License-Identifier: MIT
 */
@@ -16,7 +16,7 @@
 
 #if defined(__ANDROID__)
 #include <GLES/gl.h>
-#elif defined(_WIN32) || defined(__linux__)
+#elif defined(_WIN32) || defined(__linux__) || defined(__FreeBSD__)
 #include "GL/glcorearb.h"
 #elif defined(__APPLE__)
 #include <OpenGL/GL.h>
@@ -33,7 +33,7 @@
 
 #if defined(_WIN32)
     #define CLI_DEBUG_BREAK()   __debugbreak();
-#elif defined(__linux__) || defined(__APPLE__)
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
     #include <limits.h>
     #include <signal.h>
     #define CLI_DEBUG_BREAK()   raise(SIGTRAP);
@@ -53,7 +53,7 @@
     #define CLI_ASSERT(x)
 #endif
 
-#if defined(_WIN32) || defined(__linux__)
+#if defined(_WIN32) || defined(__linux__) || defined(__FreeBSD__)
     #define CLIRN( _funcname )  _funcname
 #elif defined(__APPLE__)
     #define CLIRN( _funcname )  i ## _funcname
@@ -75,8 +75,8 @@
     #define CLI_SPRINTF(_s, _sz, _f, ...)   snprintf(_s, _sz, _f, ##__VA_ARGS__)
     #define CLI_VSPRINTF(_s, _sz, _f, _a)   vsnprintf(_s, _sz, _f, _a)
     // TODO: Investigate how to reliably use memcpy_s on Linux:
-    #define CLI_MEMCPY(_d, _dsz, _s, _sz)   memcpy(_d, _s, _sz)
-    #define CLI_STRCAT(_d, _dsz, _s)        strcat(_d, _s)
+    #define CLI_MEMCPY(_d, _dsz, _s, _sz)   ((void)(_dsz), memcpy(_d, _s, _sz))
+    #define CLI_STRCAT(_d, _dsz, _s)        ((void)(_dsz), strcat(_d, _s))
     #define CLI_STRTOK(_s, _d, _c)          strtok_r(_s, _d, _c)
     #define CLI_C_ASSERT(e) typedef char __attribute__((unused)) __C_ASSERT__[(e)?1:-1]
 #endif

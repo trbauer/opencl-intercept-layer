@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2018-2022 Intel Corporation
+// Copyright (c) 2018-2024 Intel Corporation
 //
 // SPDX-License-Identifier: MIT
 */
@@ -36,8 +36,8 @@ static void* OpenLibrary( const std::string& metricsLibraryName )
 
 #define GetFunctionAddress(_handle, _name)  GetProcAddress((HMODULE)_handle, _name)
 
-#elif defined(__linux__) || defined(__APPLE__)
-#ifdef __linux__
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__FreeBSD__)
 static const char* cMDLibFileName = "libigdmd.so";
 #else
 static const char* cMDLibFileName = "libigdmd.dylib";
@@ -72,7 +72,6 @@ static void* OpenLibrary( const std::string& metricsLibraryName )
 }
 
 #define GetFunctionAddress(_handle, _name)  dlsym(_handle, _name)
-#define GetLastError()                      dlerror()
 #define OutputDebugString(_buf)             fprintf(stderr, "%s", _buf);
 
 #endif
@@ -146,7 +145,7 @@ MDHelper* MDHelper::CreateEBS(
     const std::string& metricsFileName,
     const bool includeMaxValues )
 {
-#if defined(__linux__)
+#if defined(__linux__) || defined(__FreeBSD__)
     // This is a temporary workaround until the Linux MDAPI is updated
     // to expose metrics for OpenCL.
     MDHelper*   pMDHelper = new MDHelper(API_TYPE_OCL|API_TYPE_OGL4_X);
@@ -220,7 +219,7 @@ bool MDHelper::InitMetricsDiscovery(
 
     if (m_APIMask & API_TYPE_IOSTREAM && m_APIMask != API_TYPE_IOSTREAM)
     {
-        DebugPrint("API type IOSTREAM cannot be combined with any other API type.");
+        DebugPrint("API type IOSTREAM cannot be combined with any other API type.\n");
         return false;
     }
 
@@ -229,28 +228,28 @@ bool MDHelper::InitMetricsDiscovery(
     void* pLibrary = OpenLibrary(metricsLibraryName);
     if (pLibrary == NULL)
     {
-        DebugPrint("Couldn't load metrics discovery library!");
+        DebugPrint("Couldn't load metrics discovery library!\n");
         return false;
     }
 
     CloseMetricsDevice = (CloseMetricsDevice_fn)GetFunctionAddress(pLibrary, "CloseMetricsDevice");
     if (CloseMetricsDevice == NULL)
     {
-        DebugPrint("CloseMetricsDevice NULL, error: %d", GetLastError());
+        DebugPrint("Couldn't get pointer to CloseMetricsDevice!\n");
         return false;
     }
 
     OpenMetricsDevice = (OpenMetricsDevice_fn)GetFunctionAddress(pLibrary, "OpenMetricsDevice");
     if (OpenMetricsDevice == NULL)
     {
-        DebugPrint("OpenMetricsDevice NULL, error: %d", GetLastError());
+        DebugPrint("Couldn't get pointer to OpenMetricsDevice!\n");
         return false;
     }
 
     OpenMetricsDeviceFromFile = (OpenMetricsDeviceFromFile_fn)GetFunctionAddress(pLibrary, "OpenMetricsDeviceFromFile");
     if (OpenMetricsDeviceFromFile == NULL)
     {
-        DebugPrint("OpenMetricsDeviceFromFile NULL, error: %d", GetLastError());
+        DebugPrint("Couldn't get pointer to OpenMetricsDeviceFromFile!\n");
         return false;
     }
 
@@ -263,7 +262,7 @@ bool MDHelper::InitMetricsDiscovery(
         }
         if (res != CC_OK)
         {
-            DebugPrint("OpenMetricsDeviceFromFile failed, res: %d", res);
+            DebugPrint("OpenMetricsDeviceFromFile failed, res: %d\n", res);
             return false;
         }
     }
@@ -272,7 +271,7 @@ bool MDHelper::InitMetricsDiscovery(
         res = OpenMetricsDevice(&m_MetricsDevice);
         if (res != CC_OK)
         {
-            DebugPrint("OpenMetricsDevice failed, res: %d", res);
+            DebugPrint("OpenMetricsDevice failed, res: %d\n", res);
             return false;
         }
     }
@@ -280,7 +279,7 @@ bool MDHelper::InitMetricsDiscovery(
     TMetricsDeviceParams_1_0* deviceParams = m_MetricsDevice->GetParams();
     if (NULL == deviceParams)
     {
-        DebugPrint("DeviceParams null");
+        DebugPrint("DeviceParams null\n");
         return false;
     }
 

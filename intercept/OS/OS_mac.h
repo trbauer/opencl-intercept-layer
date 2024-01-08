@@ -1,5 +1,5 @@
 /*
-// Copyright (c) 2018-2022 Intel Corporation
+// Copyright (c) 2018-2024 Intel Corporation
 //
 // SPDX-License-Identifier: MIT
 */
@@ -28,6 +28,10 @@ public:
                 size_t& length ) const;
 
     bool    GetBuiltinKernelString(
+                const char*& str,
+                size_t& length ) const;
+
+    bool    GetReplayScriptString(
                 const char*& str,
                 size_t& length ) const;
 
@@ -72,6 +76,13 @@ inline bool Services::GetPrecompiledKernelString(
 }
 
 inline bool Services::GetBuiltinKernelString(
+    const char*& str,
+    size_t& length ) const
+{
+    return false;
+}
+
+inline bool Services::GetReplayScriptString(
     const char*& str,
     size_t& length ) const
 {

@@ -104,8 +104,12 @@ For Windows:
 For Linux:
 
 - `./real_libOpenCL.so`
-- `/usr/lib/x86_64-linux-gnu/libOpenCL.so.1`
+- `/usr/lib/x86_64-linux-gnu/libOpenCL.so.1` (optional, for systems with a detected multi-arch specifier)
 - `/usr/lib/x86_64-linux-gnu/libOpenCL.so`
+- `/usr/lib/libOpenCL.so.1`
+- `/usr/lib/libOpenCL.so`
+- `/usr/local/lib/libOpenCL.so.1`
+- `/usr/local/lib/libOpenCL.so`
 - `/opt/intel/opencl/lib64/libOpenCL.so.1`
 - `/opt/intel/opencl/lib64/libOpenCL.so`
 - `/glob/development-tools/oneapi/inteloneapi/compiler/latest/linux/lib/libOpenCL.so.1`
@@ -183,9 +187,21 @@ If set to a nonzero value, logs the elapsed time in microseconds in addition to 
 
 If set to a nonzero value, logs function entry and exit information for every OpenCL call using the ITT APIs.  This feature will only function if the Intercept Layer for OpenCL Applications is built with ITT support.
 
+##### `ChromeTraceBufferSize` (cl_uint)
+
+If set to a nonzero value, buffers JSON records for Chrome Tracing in memory before writing to a file.  The buffer will be flushed when it fills, upon application termination, and optionally on blocking OpenCL calls.
+
+##### `ChromeTraceBufferingBlockingCallFlush` (bool)
+
+If set to a nonzero value, flushes buffered JSON records for Chrome Tracing after blocking OpenCL calls.
+
 ##### `ChromeCallLogging` (bool)
 
 If set to a nonzero value, logs function entry and exit information for every OpenCL call to a JSON file that may be used for Chrome Tracing.
+
+##### `ChromeFlowEvents` (bool)
+
+If set to a nonzero value, adds flow events between OpenCL calls and OpenCL commands in a JSON file that may be used for Chrome Tracing.  Requires both ChromeCallLogging and ChromePerformanceTiming.
 
 ##### `ErrorLogging` (bool)
 
@@ -227,6 +243,10 @@ If set to a nonzero value, the Intercept Layer for OpenCL Applications will chec
 
 If set to a nonzero value, logs information about the platforms and devices in the system on the first call to clGetPlatformIDs().
 
+##### `FlushFiles` (bool)
+
+If set to a nonzero value, the Intercept Layer for OpenCL Applications will flush files after ever write.  This slows down performance but can help to avoid truncated files if the Intercept Layer for OpenCL Applications does not exit cleanly.
+
 ##### `DumpDir` (string)
 
 If set, the Intercept Layer for OpenCL Applications will emit logs and dumps to this directory instead of the default directory.  The default log and dump directory is "%SYSTEMDRIVE%\\Intel\\CLIntercept\_Dump\\\<Process Name\>" on Windows and "~/CLIntercept\_Dump/\<Process Name\>" on other operating systems.  The log and dump directory must be writeable, otherwise the Intercept Layer for OpenCL Applications will not be able to create or modify log or dump files.
@@ -243,6 +263,10 @@ If set to a nonzero value, the Intercept Layer for OpenCL Applications will appe
 
 If an OpenCL application uses kernels with very long names, the Intercept Layer for OpenCL Applications can substitute a "short" kernel identifier for a "long" kernel name in logs and reports.  This control defines how long a kernel name must be (in characters) before it is replaced by a "short" kernel identifier.
 
+##### `DemangleKernelNames` (bool)
+
+If set to a nonzero value, the Intercept Layer for OpenCL Applications will track kernel names that are demangled according to C++ ABI rules.  This setting requires compiler support for demangling and may not be available in all configurations.
+
 ### Reporting Controls
 
 ##### `ReportToStderr` (bool)
@@ -252,6 +276,10 @@ If set to a nonzero value, the Intercept Layer for OpenCL Applications will emit
 ##### `ReportToFile` (bool)
 
 If set to a nonzero value, the Intercept Layer for OpenCL Applications will write results to the file "clintercept\_report.txt".
+
+##### `ReportInterval` (cl_uint)
+
+If set to a nonzero value, the Intercept Layer for OpenCL Applications will generate a report at regular intervals (based on the enqueue counter).  This can be useful to generate report data while a long-running application is executing, or if an application does not exit cleanly.
 
 ### Performance Timing Controls
 
@@ -286,6 +314,10 @@ If set to a nonzero value, the Intercept Layer for OpenCL Applications will dist
 ##### `DevicePerformanceTimeSuggestedLWSTracking` (bool)
 
 If set to a nonzero value, the Intercept Layer for OpenCL Applications will attempt to query and track the suggested local work size when the passed-in local work size is NULL.
+
+##### `DevicePerformanceTimeTransferTracking` (bool)
+
+If set to a nonzero value, the Intercept Layer for OpenCL Applications will distinguish between transfer operations of different sizes for the purpose of device performance timing.
 
 ##### `DevicePerformanceTimingSkipUnmap` (bool)
 
@@ -445,6 +477,14 @@ If set to a nonzero value, the Intercept Layer for OpenCL Applications will dump
 
 If set to a nonzero value, the Intercept Layer for OpenCL Applications will dump kernel ISA binaries for every kernel, if supported.  Currently, kernel ISA binaries are only supported for Intel GPU devices.  Kernel ISA binaries can be decoded into ISA text with a disassembler.  The filename will have the form "CLI\_\<Program Number\>\_\<Unique Program Hash Code\>\_\<Compile Count\>\_\<Unique Build Options Hash Code\>\_\<Device Type\>\_\<Kernel Name\>.isabin".
 
+##### `DumpReplayKernelEnqueue` (int)
+
+If set to a positive value, the Intercept Layer for OpenCL Applications will dump in /Replay/Enqueue\_*/ a standalone (i.e. runs completely independent from the original program from which is was captured) playable set of files for the specified enqueue number which can be used for debugging or profiling. When a program was build from source code, it will dump that one, otherwise it will dump the device binary. It is advised to not use this setting directly, but use /scripts/capture\_and\_validate.py.
+
+##### `DumpReplayKernelName` (string)
+
+If set, the Intercept Layer for OpenCL Applications for dump the specified kernel the first time it is encountered so that it can be replayed independently. It is advised to not use this setting directly, but use /scripts/capture\_and\_validate.py
+
 ### Controls for Emulating Features
 
 ##### `Emulate_cl_khr_extended_versioning` (bool)
@@ -542,6 +582,14 @@ The Intercept Layer for OpenCL Applications will only dump image kernel argument
 ##### `DumpImagesMaxEnqueue` (cl_uint)
 
 The Intercept Layer for OpenCL Applications will only dump image kernel arguments when the enqueue counter is less than this value, inclusive.
+
+##### `DumpArgumentsOnSetMinEnqueue` (cl_uint)
+
+The Intercept Layer for OpenCL Applications will only dump argument values when the enqueue counter is greater than this value, inclusive.
+
+##### `DumpArgumentsOnSetMaxEnqueue` (cl_uint)
+
+The Intercept Layer for OpenCL Applications will only dump kernel arguments when the enqueue counter is less than this value, inclusive.
 
 ### Device Partitioning Controls
 
@@ -739,6 +787,10 @@ If set to a non-empty string, the clGetDeviceInfo() query for CL\_DEVICE\_OPENCL
 
 If set to a non-empty string, the clGetDeviceInfo() query for CL\_DEVICE\_EXTENSIONS will return this value instead of the true device extensions string.
 
+##### `DeviceILVersion` (string)
+
+If set to a non-empty string, the clGetDeviceInfo() query for CL\_DEVICE\_IL\_VERSION will return this value instead of the true device intermediate language versions.
+
 ##### `DeviceVendorID` (cl_uint)
 
 If set to a non-zero value, the clGetDeviceInfo() query for CL\_DEVICE\_VENDOR will return this value instead of the true device vendor ID.
@@ -818,4 +870,4 @@ If set to a nonzero value, the Intercept Layer for OpenCL Applications will use 
 
 \* Other names and brands may be claimed as the property of others.
 
-Copyright (c) 2018-2022, Intel(R) Corporation
+Copyright (c) 2018-2024, Intel(R) Corporation
